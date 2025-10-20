@@ -1,0 +1,8 @@
+flask
+google-cloud-storage
+httpx[http2]
+feedparser
+orjson
+beautifulsoup4
+gunicorn
+google-cloud-logging

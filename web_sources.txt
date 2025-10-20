@@ -1,0 +1,5 @@
+# Lista stron do scrapowania (jako fallback).
+# Używaj tego dla stron, które nie mają dobrego RSS, jak np. loter.pl
+# Pamiętaj, że scraping jest mniej niezawodny niż RSS.
+
+https://loter.pl/
