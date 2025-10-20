@@ -1,16 +1,12 @@
-Project Title: Travel Deal Hybrid Bot (v6.0) ✈️💰
+**Project Title: Travel Deal Hybrid Bot (v6.0)** ✈️💰
 Table of Contents
 
-
-
-
-
-Introduction
+**Introduction**
 The Travel Deal Hybrid Bot (v6.0) is a high-performance, asynchronous Python application designed to aggregate real-time flight and holiday deals from multiple external sources (RSS Feeds) and publish them to a Telegram channel. The system includes an automated cleanup mechanism to manage content lifecycle.
 
 This project was developed to overcome the limitations of simple feed readers by adding deduplication logic, content scraping, intelligent emoji tagging, and a robust atomic state management system.
 
-Key Features
+**Key Features**
 Real-time Aggregation: Simultaneously monitors over 10 flight and travel deal RSS feeds (e.g., fly4free.pl, wakacyjnipiraci.pl, secretflying.com).
 
 Asynchronous Processing: Utilizes httpx and asyncio with per-host concurrency limits and jitter delays to ensure efficient, non-blocking requests and avoid IP bans.
@@ -47,27 +43,19 @@ Content Extraction Logic: Developed scrape_description to intelligently find the
 
 Failure Resilience: The sweep_delete_queue function handles Telegram API errors (400/403) gracefully, specifically logging messages that are "too old" or "not found" and removing them from the queue without retries, thus cleaning up the state.
 
-Contact
-LinkedIn: [Link do Twojego profilu LinkedIn]
+**Contact:**
 
-Email: [Twój adres email]
+**Email: patrykmozeluk@gmail.com**
 
-Other Projects: [Link do Twojego głównego profilu GitHub]
+**🇵🇱 Wersja Polska**
+**Tytuł Projektu: Hybrydowy Bot Ofert Podróżniczych (v6.0)** ✈️💰
 
-🇵🇱 Wersja Polska
-Tytuł Projektu: Hybrydowy Bot Ofert Podróżniczych (v6.0) ✈️💰
-Spis Treści
-
-
-
-
-
-Wprowadzenie
+**Wprowadzenie**
 Hybrydowy Bot Ofert Podróżniczych (v6.0) to wysokowydajna, asynchroniczna aplikacja w Pythonie, zaprojektowana do agregowania ofert lotniczych i wakacyjnych w czasie rzeczywistym z wielu źródeł zewnętrznych (feedów RSS) i publikowania ich na kanale Telegrama. System zawiera zautomatyzowany mechanizm porządkowania, który zarządza cyklem życia treści.
 
 Projekt ten został stworzony, aby pokonać ograniczenia prostych czytników RSS poprzez dodanie logiki deduplikacji, scrapowania treści, inteligentnego tagowania emotikonami oraz solidnego systemu atomowego zarządzania stanem.
 
-Główne Funkcjonalności
+**Główne Funkcjonalności**
 Agregacja w Czasie Rzeczywistym: Jednoczesne monitorowanie ponad 10 feedów RSS z ofertami lotniczymi i podróżniczymi (np. fly4free.pl, wakacyjnipiraci.pl, secretflying.com).
 
 Przetwarzanie Asynchroniczne: Wykorzystanie bibliotek httpx i asyncio z limitami współbieżności na hosta i opóźnieniami typu jitter, aby zapewnić wydajne, nieblokujące żądania i uniknąć blokad adresów IP.
@@ -104,8 +92,6 @@ Logika Ekstrakcji Treści: Opracowałem funkcję scrape_description, aby intelig
 
 Odporność na Błędy: Funkcja sweep_delete_queue elegancko obsługuje błędy API Telegrama (400/403), w szczególności logując wiadomości, które są „za stare” lub „nie znalezione” i usuwając je z kolejki bez ponawiania prób, co przyczynia się do oczyszczania stanu.
 
-Kontakt
+**Kontakt**
 
-Email: patrykmozeluk@gmail.com
-
-Inne Projekty: https://github.com/patrykmozeluk-cloud/Travel-bot/settings
+**Email: patrykmozeluk@gmail.com**
