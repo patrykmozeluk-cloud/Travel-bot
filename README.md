@@ -1,11 +1,11 @@
-Project Title: Travel Deal Hybrid Bot (v6.0) ✈️💰
+**Project Title: Travel Deal Hybrid Bot (v6.0)** ✈️💰
 
-Introduction
+**Introduction**
 The Travel Deal Hybrid Bot (v6.0) is a high-performance, asynchronous Python application designed to aggregate real-time flight and holiday deals from multiple external sources (RSS Feeds) and publish them to a Telegram channel. The system includes an automated cleanup mechanism to manage content lifecycle.
 
 This project was developed to overcome the limitations of simple feed readers by adding deduplication logic, content scraping, intelligent emoji tagging, and a robust atomic state management system.
 
-Key Features
+**Key Features**
 - **Real-time Aggregation:** Simultaneously monitors over 10 flight and travel deal RSS feeds (e.g., fly4free.pl, wakacyjnipiraci.pl, secretflying.com).
 - **Asynchronous Processing:** Utilizes httpx and asyncio with per-host concurrency limits and jitter delays to ensure efficient, non-blocking requests and avoid IP bans.
 - **Intelligent Content:** Automatically extracts a brief description from the linked deal page and adds relevant flag and category emojis based on keyword detection (e.g., 🇪🇸, 🇯🇵, 🏖️, 💰).
@@ -56,7 +56,7 @@ Key Features
 
 *   **`rss_sources.txt`**: This file contains the list of RSS feed URLs that the bot will monitor. Add or remove URLs (one per line) to change the data sources. Lines starting with `#` are ignored.
 
-Architecture and Technology Stack
+**Architecture and Technology Stack**
 The bot runs as a containerized web service with a Flask-based endpoint for triggering the main job, making it suitable for deployment on cloud platforms like Google Cloud Run or a dedicated VM.
 
 - **Language:** Python 3.13
@@ -65,7 +65,7 @@ The bot runs as a containerized web service with a Flask-based endpoint for trig
 - **Cloud/State:** google-cloud-storage (for atomic state persistence)
 - **Deployment:** Docker, Gunicorn, Flask
 
-Portfolio Highlight (Technical Breakdown)
+**Portfolio Highlight (Technical Breakdown)**
 This project showcases my ability to develop highly resilient and scalable data pipeline logic.
 
 - **Concurrency Control:** I implemented a custom asyncio.Semaphore system (_sem_for) to limit concurrent requests to the same source host (e.g., max 2 connections per domain), preventing potential rate-limiting issues while maintaining overall high speed.
@@ -73,21 +73,21 @@ This project showcases my ability to develop highly resilient and scalable data 
 - **Content Extraction Logic:** Developed scrape_description to intelligently find the most relevant paragraph on a deal page, truncate it neatly at the last space within 200 characters, and use it as the main Telegram message text, significantly improving message quality.
 - **Failure Resilience:** The sweep_delete_queue function handles Telegram API errors (400/403) gracefully, specifically logging messages that are "too old" or "not found" and removing them from the queue without retries, thus cleaning up the state.
 
-Contact
+**Contact**
 - **Email:** patrykmozeluk@gmail.com
 - **Other Projects:** https://github.com/patrykmozeluk-cloud
 
 ---
 
-🇵🇱 Wersja Polska
-Tytuł Projektu: Hybrydowy Bot Ofert Podróżniczych (v6.0) ✈️💰
+**🇵🇱 Wersja Polska**
+**Tytuł Projektu: Hybrydowy Bot Ofert Podróżniczych (v6.0)** ✈️💰
 
-Wprowadzenie
+**Wprowadzenie**
 Hybrydowy Bot Ofert Podróżniczych (v6.0) to wysokowydajna, asynchroniczna aplikacja w Pythonie, zaprojektowana do agregowania ofert lotniczych i wakacyjnych w czasie rzeczywistym z wielu źródeł zewnętrznych (feedów RSS) i publikowania ich na kanale Telegrama. System zawiera zautomatyzowany mechanizm porządkowania, który zarządza cyklem życia treści.
 
 Projekt ten został stworzony, aby pokonać ograniczenia prostych czytników RSS poprzez dodanie logiki deduplikacji, scrapowania treści, inteligentnego tagowania emotikonami oraz solidnego systemu atomowego zarządzania stanem.
 
-Główne Funkcjonalności
+**Główne Funkcjonalności**
 - **Agregacja w Czasie Rzeczywistym:** Jednoczesne monitorowanie ponad 10 feedów RSS z ofertami lotniczymi i podróżniczymi (np. fly4free.pl, wakacyjnipiraci.pl, secretflying.com).
 - **Przetwarzanie Asynchroniczne:** Wykorzystanie bibliotek httpx i asyncio z limitami współbieżności na hosta i opóźnieniami typu jitter, aby zapewnić wydajne, nieblokujące żądania i uniknąć blokad adresów IP.
 - **Inteligentna Treść:** Automatyczne pobieranie krótkiego opisu ze strony oferty i dodawanie odpowiednich emotikon flag i kategorii na podstawie wykrytych słów kluczowych (np. 🇪🇸, 🇯🇵, 🏖️, 💰).
@@ -138,7 +138,7 @@ Główne Funkcjonalności
 
 *   **`rss_sources.txt`**: Ten plik zawiera listę adresów URL kanałów RSS, które bot będzie monitorował. Dodawaj lub usuwaj adresy (jeden na linię), aby zmieniać źródła danych. Linie zaczynające się od `#` są ignorowane.
 
-Architektura i Użyte Technologie
+**Architektura i Użyte Technologie**
 Bot działa jako skonteneryzowana usługa webowa z endpointem opartym na Flasku do wyzwalania głównego zadania, dzięki czemu jest idealny do wdrożenia na platformach chmurowych, takich jak Google Cloud Run lub dedykowana maszyna wirtualna.
 
 - **Język:** Python 3.13
@@ -147,7 +147,7 @@ Bot działa jako skonteneryzowana usługa webowa z endpointem opartym na Flasku 
 - **Chmura/Stan:** google-cloud-storage (do atomowej persystencji stanu)
 - **Wdrożenie:** Docker, Gunicorn, Flask
 
-Projekt jako Element Portfolio (Analiza Techniczna)
+**Projekt jako Element Portfolio (Analiza Techniczna)**
 Ten projekt prezentuje moje umiejętności w tworzeniu wysoce odpornej i skalowalnej logiki pipeline'ów danych.
 
 - **Kontrola Współbieżności:** Wdrożyłem niestandardowy system asyncio.Semaphore (_sem_for), aby ograniczyć jednoczesne żądania do tego samego hosta źródłowego (np. maks. 2 połączenia na domenę). Zapobiega to problemom z limitami zapytań, zachowując jednocześnie wysoką ogólną szybkość.
@@ -155,6 +155,6 @@ Ten projekt prezentuje moje umiejętności w tworzeniu wysoce odpornej i skalowa
 - **Logika Ekstrakcji Treści:** Opracowałem funkcję scrape_description, aby inteligentnie znaleźć najbardziej istotny akapit na stronie oferty, elegancko go skrócić przy ostatniej spacji w granicach 200 znaków i użyć jako głównego tekstu wiadomości Telegrama, co znacząco poprawia jakość komunikacji.
 - **Odporność na Błędy:** Funkcja sweep_delete_queue elegancko obsługuje błędy API Telegrama (400/403), w szczególności logując wiadomości, które są „za stare” lub „nie znalezione” i usuwając je z kolejki bez ponawiania prób, co przyczynia się do oczyszczania stanu.
 
-Kontakt
+**Kontakt**
 - **Email:** patrykmozeluk@gmail.com
 - **Inne Projekty:** https://github.com/patrykmozeluk-cloud
