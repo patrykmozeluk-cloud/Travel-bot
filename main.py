@@ -141,6 +141,50 @@ def save_state_atomic(state: Dict[str, Any], gen: int | None):
             raise
     raise RuntimeError("Atomic state save failed.")
 
+def sanitizing_startup_check(state: Dict[str, Any]) -> int:
+    """
+    Sprawdza i naprawia kolejkę 'delete_queue' pod kątem uszkodzonych wpisów chat_id.
+    Jest to jednorazowa funkcja naprawcza uruchamiana przy starcie.
+    Zwraca liczbę naprawionych wpisów.
+    """
+    if "delete_queue" not in state or not isinstance(state.get("delete_queue"), list):
+        return 0
+
+    fixed_entries_count = 0
+    sanitized_queue = []
+    
+    # Używamy wyrażenia regularnego do bezpiecznego wyciągnięcia ID
+    import re
+    id_pattern = re.compile(r"^(-?\d+)")
+
+    for item in state.get("delete_queue", []):
+        if not isinstance(item, dict) or "chat_id" not in item:
+            sanitized_queue.append(item)
+            continue
+
+        chat_id = item["chat_id"]
+        
+        # Sprawdzamy, czy chat_id to string i czy zawiera spację - to sygnatura uszkodzenia
+        if isinstance(chat_id, str) and ' ' in chat_id:
+            original_id = chat_id
+            match = id_pattern.match(original_id)
+            if match:
+                clean_id = match.group(1)
+                item["chat_id"] = clean_id
+                fixed_entries_count += 1
+                log.info(f"Sanitized chat_id: '{original_id}' -> '{clean_id}'")
+            else:
+                log.warning(f"Could not sanitize chat_id '{original_id}'. Keeping original but this is an error.")
+        
+        sanitized_queue.append(item)
+
+    if fixed_entries_count > 0:
+        state["delete_queue"] = sanitized_queue
+        log.info(f"SANITIZING COMPLETE: Repaired {fixed_entries_count} entries in the delete_queue.")
+
+    return fixed_entries_count
+
+
 # ---------- DOMAIN-SPECIFIC CONFIG & HTTP CLIENT (Bez zmian) ----------
 DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
     "travel-dealz.com": { 
@@ -222,14 +266,6 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
     except Exception as e:
         dbg(f"Could not scrape description for {url}: {e}")
     return None
-
-def add_emojis(text: str) -> str:
-    found_emojis = []
-    text_lower = text.lower()
-    for emoji, keywords in EMOJI_KEYWORDS.items():
-        if any(keyword in text_lower for keyword in keywords):
-            found_emojis.append(emoji)
-    return ' '.join(found_emojis) + ' ' + text if found_emojis else text
 
 def add_emojis(text: str) -> str:
     found_emojis = []
@@ -496,6 +532,23 @@ async def process_sources_async() -> str:
 
     if not TG_TOKEN or not TELEGRAM_CHANNEL_ID: return "Missing critical environment variables."
     state, generation = load_state()
+
+    # --- SANITIZING STARTUP CHECK ---
+    try:
+        fixed_count = sanitizing_startup_check(state)
+        if fixed_count > 0:
+            log.warning(f"CRITICAL REPAIR: Found and fixed {fixed_count} corrupted entries in state file.")
+            try:
+                save_state_atomic(state, generation)
+                log.info("Successfully saved repaired state. Reloading state to continue run.")
+                # Ponownie załaduj stan, aby uzyskać nowy numer generacji i mieć pewność, że wszystko jest czyste
+                state, generation = load_state()
+            except Exception as e:
+                log.critical(f"CRITICAL FAILURE: Could not save repaired state file. Aborting run. Error: {e}")
+                return "Critical: State repair failed during save."
+    except Exception as e:
+        log.error(f"An unexpected error occurred during the sanitizing check: {e}")
+    # --- END SANITIZING ---
 
     # Zintegrowane czyszczenie (sweep) na początku wykonania
     log.info("Running the integrated sweep job at the start of the main run...")
