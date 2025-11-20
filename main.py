@@ -5,11 +5,13 @@ import asyncio
 import httpx
 import feedparser
 import orjson
+import json # For safe JSON parsing of AI responses
 import time
 import random
 import html
 from flask import Flask, request, jsonify
-from google.cloud import storage # Usunięto 'vision'
+from google.cloud import storage 
+import google.generativeai as genai # For Gemini AI integration
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
 from typing import Dict, Any, Tuple, List
 from datetime import datetime, timedelta, timezone
@@ -29,7 +31,10 @@ def env(name: str, default: Any = None) -> Any:
     return os.environ.get(name, default)
 
 TG_TOKEN = env("TG_TOKEN")
-TG_CHAT_ID = env("TG_CHAT_ID")
+TELEGRAM_CHANNEL_ID = env("TELEGRAM_CHANNEL_ID") # Renamed from TG_CHAT_ID
+TELEGRAM_CHAT_GROUP_ID = env("TELEGRAM_CHAT_GROUP_ID") # New for AI-selected posts
+TELEGRAM_CHANNEL_USERNAME = env("TELEGRAM_CHANNEL_USERNAME") # New for linking to channel messages
+GEMINI_API_KEY = env("GEMINI_API_KEY") # New for Gemini AI
 BUCKET_NAME = env("BUCKET_NAME")
 SENT_LINKS_FILE = env("SENT_LINKS_FILE", "sent_links.json")
 HTTP_TIMEOUT = float(env("HTTP_TIMEOUT", "15.0"))
@@ -46,6 +51,18 @@ JITTER_MIN_MS = int(env("JITTER_MIN_MS", "120"))
 JITTER_MAX_MS = int(env("JITTER_MAX_MS", "400"))
 
 SECRETFLYING_HOST = "secretflying.com"
+
+# ---------- GEMINI AI CONFIGURATION ----------
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel(
+        'gemini-2.5-flash',
+        generation_config={"response_mime_type": "application/json"}
+    )
+    log.info("Gemini AI model configured.")
+else:
+    gemini_model = None
+    log.warning("GEMINI_API_KEY not set. AI analysis will be disabled.")
 
 # NOWA SEKACJA: EMOTIKONY (Bez zmian)
 EMOJI_KEYWORDS = {
@@ -214,18 +231,102 @@ def add_emojis(text: str) -> str:
             found_emojis.append(emoji)
     return ' '.join(found_emojis) + ' ' + text if found_emojis else text
 
+def add_emojis(text: str) -> str:
+    found_emojis = []
+    text_lower = text.lower()
+    for emoji, keywords in EMOJI_KEYWORDS.items():
+        if any(keyword in text_lower for keyword in keywords):
+            found_emojis.append(emoji)
+    return ' '.join(found_emojis) + ' ' + text if found_emojis else text
+
+async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not gemini_model:
+        log.error("Gemini AI model not initialized. Skipping AI analysis.")
+        return []
+
+    system_prompt = f"""
+Jesteś Globalnym Ekspertem Rynku Lotniczego i Turystycznego. Twoim zadaniem jest analiza listy ofert RSS i zwrócenie listy wyników w formacie JSON.
+
+Przetwórz KAŻDĄ ofertę z poniższej listy. Dla każdej oferty wykonaj następujące kroki:
+
+KROK 1: KONTEKST ŹRÓDŁA (Dostosuj perspektywę):
+    • 'The Flight Deal' (i inne z USA jak 'theflightdeal.com'): Rynek USA. Waluta USD. Loty wewnątrz USA lub z USA są atrakcyjne. Nie obniżaj oceny za wylot z Ameryki.
+    • 'Fly4Free' (i inne PL/EU jak 'fly4free.pl', 'wakacyjnipiraci.pl', 'travel-dealz.com'): Rynek Europejski (szczególnie Polska). Waluta PLN/EUR. Priorytet: Polska + Huby (Berlin, Praga, Wiedeń, Londyn, Sztokholm - tani dolot).
+    • 'Travel Dealz' (lub wzmianka o 'Business Class' w tytule/opisie): Rynek Premium. Oczekuj wysokich cen (np. 5000 PLN). Jeśli to Biznes Klasa - oceniaj jako okazję, nie jako drożyznę.
+    • Dla wszystkich innych źródeł: Ocena globalna.
+
+KROK 2: OCENA (1-10):
+    • 9-10: Mega Hit, Error Fare, Biznes w cenie Economy, Ważny News (strajki, wizy, zmiany w przepisach).
+    • 7-8: Dobra, solidna oferta.
+    • 1-6: Przeciętna cena, reklama, spam. (ODRZUĆ, is_good: false).
+
+KROK 3: GENEROWANIE TREŚCI (Dwa Warianty):
+    • 'channel_msg': Styl dziennikarski, informacyjny, konkretne daty, ceny, miejsca docelowe, emoji. Max 200 znaków.
+    • 'chat_msg': Styl luźny, "vibe coding", pytanie angażujące społeczność (np. "Kto leci?", "Kto się skusi?"), emoji. Max 150 znaków.
+    
+    W obu wiadomościach (channel_msg i chat_msg) unikaj umieszczania linku do oferty. Link zostanie dodany automatycznie przez bota.
+
+KROK 4: SELEKCJA NA CZAT:
+    • Ustaw 'post_to_chat': true TYLKO dla ocen 9-10 (Hity) lub Ważnych Newsów (np. o strajkach, zmianach wizowych). Nie chcemy spamu na czacie.
+
+Twoja odpowiedź MUSI być pojedynczym obiektem JSON, zawierającym klucz "results", który jest listą obiektów. Każdy obiekt w liście musi odpowiadać jednej ofercie z wejścia i zawierać jej oryginalne "id".
+
+Format odpowiedzi:
+{{
+  "results": [
+    {{ "id": 0, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str }},
+    {{ "id": 1, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str }}
+  ]
+}}
+"""
+    
+    batch_prompt_parts = []
+    for candidate in candidates:
+        batch_prompt_parts.append(
+            f"OFERTA ID: {candidate['id']}\n"
+            f"Źródło: {candidate['source_name']}\n"
+            f"Tytuł: {candidate['title']}\n"
+            f"Opis: {candidate['description'] or 'Brak opisu.'}"
+        )
+    
+    user_message = "Przeanalizuj poniższe oferty:\n\n---\n".join(batch_prompt_parts)
+
+    try:
+        log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI.")
+        response = await gemini_model.generate_content_async([system_prompt, user_message])
+        
+        if not response.text:
+            log.warning("Gemini API returned empty response for batch.")
+            return []
+
+        try:
+            ai_results_wrapper = json.loads(response.text)
+            ai_results = ai_results_wrapper.get("results", [])
+            
+            if not isinstance(ai_results, list):
+                log.error(f"Gemini API returned 'results' that is not a list: {ai_results}")
+                return []
+            
+            log.info(f"AI processed batch and returned {len(ai_results)} results.")
+            return ai_results
+
+        except (json.JSONDecodeError, KeyError):
+            log.error(f"Gemini API returned invalid JSON or missing 'results' key for batch: {response.text[:200]}")
+            return []
+
+    except Exception as e:
+        log.error(f"Error calling Gemini API for batch: {e}")
+        return []
+
 # ---------- PRZEBUDOWANA LOGIKA WYSYŁANIA ----------
-async def send_telegram_message_async(title: str, description: str | None, link: str, host: str, chat_id: str) -> int | None:
+async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str) -> int | None:
     async with make_async_client() as client:
         try:
-            # short_link = await shorten_link(client, link) # Usunięto skracanie linków
-            display_text = description or title
-            display_text_with_emojis = add_emojis(display_text)
-            safe_text = html.escape(display_text_with_emojis, quote=False)
+            safe_text = html.escape(message_content, quote=False)
 
             # UPROSZCZENIE: Usunięto logikę warunkową dla PIRATES_HOSTS.
             # Teraz każda wiadomość jest wysyłana w ten sam, spójny sposób.
-            text = f"<b>{safe_text}</b>\n\n<a href='{link}'>Zobacz ofertę</a>"
+            text = f"{safe_text}\n\n<a href='{link}'>👉 Zobacz ofertę</a>"
             payload, method = {"text": text, "disable_web_page_preview": False}, "sendMessage"
 
             payload.update({"chat_id": chat_id, "parse_mode": "HTML"})
@@ -236,7 +337,7 @@ async def send_telegram_message_async(title: str, description: str | None, link:
             body = r.json()
 
             if body.get("ok"):
-                log.info(f"Message sent: {title[:60]}… (method={method})")
+                log.info(f"Message sent: {message_content[:60]}… (method={method})")
                 return body.get("result", {}).get("message_id")
             else:
                 log.error(f"Telegram returned ok=false: {body}")
@@ -393,7 +494,7 @@ async def scrape_webpage(client: httpx.AsyncClient, url: str) -> List[Tuple[str,
 async def process_sources_async() -> str:
     log.info("Starting a simple RSS-only processing run...")
 
-    if not TG_TOKEN or not TG_CHAT_ID: return "Missing critical environment variables."
+    if not TG_TOKEN or not TELEGRAM_CHANNEL_ID: return "Missing critical environment variables."
     state, generation = load_state()
 
     # Zintegrowane czyszczenie (sweep) na początku wykonania
@@ -430,36 +531,125 @@ async def process_sources_async() -> str:
     
     if not candidates:
         log.info("No new posts to send. (All posts were duplicates or no posts were found).")
-    else:
-        log.info(f"Found {len(candidates)} new candidates to process.")
-        
-    sent_count = 0
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
+        # Save state to prune old links even if no new posts are sent
+        prune_sent_links(state)
+        try: 
+            save_state_atomic(state, generation)
+            log.info("Successfully saved state after pruning old links.")
+        except Exception as e:
+            log.critical(f"FINAL STATE SAVE FAILED after pruning: {e}")
+        return "Run complete. No new posts."
+
+    log.info(f"Found {len(candidates)} new candidates to process in batches.")
     
-    # Sequential sending with delay to avoid rate limiting
-    send_results = []
+    # Prepare candidates with descriptions and IDs for the AI
+    detailed_candidates = []
     async with make_async_client() as client:
-        for title, link, dedup_key, source_url in candidates:
+        for i, (title, link, dedup_key, source_url) in enumerate(candidates):
             host = urlparse(link).netloc.lower().replace("www.", "")
-            
             description = None
             if host != SECRETFLYING_HOST:
                 description = await scrape_description(client, link)
+            detailed_candidates.append({
+                "id": i,
+                "title": title,
+                "link": link,
+                "dedup_key": dedup_key,
+                "source_url": source_url,
+                "description": description,
+                "host": host,
+                "source_name": host
+            })
+
+    # --- Batch Processing ---
+    BATCH_SIZE = 15
+    candidate_chunks = [detailed_candidates[i:i + BATCH_SIZE] for i in range(0, len(detailed_candidates), BATCH_SIZE)]
+    
+    all_ai_results = []
+    for chunk in candidate_chunks:
+        results = await analyze_batch(chunk)
+        all_ai_results.extend(results)
+        if len(candidate_chunks) > 1:
+            log.info(f"Processed a chunk, waiting 1s before next batch to be safe.")
+            await asyncio.sleep(1)
+
+    if not all_ai_results:
+        log.warning("AI analysis returned no results for any batch.")
+        # Save state to prune old links even if no posts are sent
+        prune_sent_links(state)
+        try: 
+            save_state_atomic(state, generation)
+            log.info("Successfully saved state after pruning old links.")
+        except Exception as e:
+            log.critical(f"FINAL STATE SAVE FAILED after empty AI result: {e}")
+        return "Run complete. AI analysis yielded no results."
+    
+    # Create a mapping from ID to original candidate data
+    candidates_by_id = {c['id']: c for c in detailed_candidates}
+
+    sent_count = 0
+    now_utc_iso = datetime.now(timezone.utc).isoformat()
+    
+    for ai_result in all_ai_results:
+        result_id = ai_result.get("id")
+        if result_id is None:
+            continue
+
+        original_candidate = candidates_by_id.get(result_id)
+        if not original_candidate:
+            log.warning(f"AI returned a result with ID {result_id} that does not match any original candidate.")
+            continue
             
-            message_id = await send_telegram_message_async(title, description, link, host, TG_CHAT_ID)
-            
-            if message_id:
-                send_results.append((dedup_key, message_id, source_url))
-            
-            # Add a small, random delay between each message
-            await asyncio.sleep(random.uniform(0.2, 0.3))
+        # Ensure is_good is correctly set based on score (AI might sometimes err)
+        is_good_flag = ai_result.get("is_good", False)
+        if ai_result.get("score", 0) < 7:
+            is_good_flag = False
+
+        if not is_good_flag:
+            log.info(f"AI deemed '{original_candidate['title'][:50]}...' not good (score: {ai_result.get('score', 'N/A')}). Skipping.")
+            continue
+
+        # --- Send to Channel ---
+        channel_message_id = await send_telegram_message_async(
+            message_content=ai_result.get("channel_msg") or original_candidate['title'],
+            link=original_candidate['link'],
+            host=original_candidate['host'],
+            chat_id=TELEGRAM_CHANNEL_ID
+        )
         
-        for dedup_key, message_id, source_url in send_results:
-            if message_id and dedup_key:
-                sent_count += 1
-                state["sent_links"][dedup_key] = now_utc_iso
-                if DELETE_AFTER_HOURS > 0:
-                    remember_for_deletion(state, TG_CHAT_ID, message_id, source_url)
+        if channel_message_id:
+            sent_count += 1
+            state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+            if DELETE_AFTER_HOURS > 0:
+                remember_for_deletion(state, TELEGRAM_CHANNEL_ID, channel_message_id, original_candidate['source_url'])
+            
+            log.info(f"Channel message for '{original_candidate['title'][:50]}...' sent and recorded.")
+
+            # --- Conditional Send to Chat Group ---
+            post_to_chat_flag = ai_result.get("post_to_chat", False)
+            if ai_result.get("score", 0) < 9: # Enforce rule: only 9+ for chat
+                 post_to_chat_flag = False
+
+            if post_to_chat_flag:
+                chat_text = ai_result.get("chat_msg") or f"Nowa super oferta: {original_candidate['title'][:50]}..."
+                
+                # 30% chance to add "Więcej na kanale" link
+                if random.random() < 0.3 and TELEGRAM_CHANNEL_USERNAME:
+                    channel_link = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}/{channel_message_id}"
+                    chat_text += f"\n\n👉 Więcej na kanale: {channel_link}"
+                
+                log.info(f"Attempting to send chat message for '{original_candidate['title'][:50]}...'.")
+                await send_telegram_message_async(
+                    message_content=chat_text,
+                    link=original_candidate['link'],
+                    host=original_candidate['host'],
+                    chat_id=TELEGRAM_CHAT_GROUP_ID
+                )
+        else:
+            log.warning(f"Failed to send channel message for '{original_candidate['title'][:50]}...'. Not processing for chat either.")
+        
+        # Add a small, random delay between each Telegram message to avoid hitting Telegram's own limits
+        await asyncio.sleep(random.uniform(0.2, 0.5))
 
     if sent_count > 0:
         prune_sent_links(state)

@@ -6,3 +6,4 @@ orjson
 beautifulsoup4
 gunicorn
 google-cloud-logging
+google-generativeai
