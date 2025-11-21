@@ -12,6 +12,7 @@ import html
 from flask import Flask, request, jsonify
 from google.cloud import storage 
 import google.generativeai as genai # For Gemini AI integration
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
 from typing import Dict, Any, Tuple, List
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,13 @@ else:
     gemini_model = None
     log.warning("GEMINI_API_KEY not set. AI analysis will be disabled.")
 
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
 # NOWA SEKACJA: EMOTIKONY (Bez zmian)
 EMOJI_KEYWORDS = {
     '🇬🇧': ['londyn', 'london', 'anglia', 'uk', 'brytanii'],
@@ -110,6 +118,9 @@ def canonicalize_url(url: str) -> str:
 def _default_state() -> Dict[str, Any]:
     return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z"}
 
+def _ensure_state_shapes(state: Dict[str, Any]):
+    if "sent_links" not in state: state["sent_links"] = {}
+    if "delete_queue" not in state: state["delete_queue"] = []
     if "last_social_post_time" not in state: state["last_social_post_time"] = "1970-01-01T00:00:00Z"
 
 def load_state() -> Tuple[Dict[str, Any], int | None]:
@@ -273,6 +284,39 @@ def add_emojis(text: str) -> str:
             found_emojis.append(emoji)
     return ' '.join(found_emojis) + ' ' + text if found_emojis else text
 
+async def gemini_api_call_with_retry(model, prompt_parts, max_retries=4):
+    """
+    Calls the Gemini API with exponential backoff retry mechanism.
+    Handles 429 (Too Many Requests) and 503 (Service Unavailable) errors.
+    """
+    if not model:
+        log.error("Gemini model not provided to retry function.")
+        return None
+
+    for attempt in range(max_retries):
+        try:
+            response = await model.generate_content_async(
+                prompt_parts,
+                safety_settings=SAFETY_SETTINGS
+            )
+            return response
+        except Exception as e:
+            # More robust check for retryable errors from the google-generativeai library
+            error_str = str(e).lower()
+            if ("429" in error_str and "resource has been exhausted" in error_str) or "503" in error_str or "service unavailable" in error_str:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** (attempt + 1)  # 2, 4, 8 seconds
+                    log.warning(f"Rate limit hit or service unavailable on attempt {attempt + 1}/{max_retries}. Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    log.error(f"Gemini API call failed after {max_retries} attempts. Final error: {e}")
+                    return None # Failed after all retries
+            else:
+                log.error(f"Non-retryable Gemini API error: {e}")
+                return None # Non-retryable error
+
+    return None # Should be unreachable, but as a fallback
+
 async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not gemini_model:
         log.error("Gemini AI model not initialized. Skipping AI analysis.")
@@ -294,12 +338,14 @@ KROK 2: OCENA (1-10):
     • 7-8: Dobra, solidna oferta.
     • 1-6: Przeciętna cena, reklama, spam. (ODRZUĆ, is_good: false).
 
-KROK 3: GENEROWANIE TREŚCI (Dwa Warianty):
+    KROK 3: GENEROWANIE TREŚCI (Dwa Warianty):
     • 'channel_msg': Styl dziennikarski, informacyjny, konkretne daty, ceny, miejsca docelowe, emoji. Max 200 znaków.
     • 'chat_msg': Styl luźny, "vibe coding", pytanie angażujące społeczność (np. "Kto leci?", "Kto się skusi?"), emoji. Max 150 znaków.
     
-    W obu wiadomościach (channel_msg i chat_msg) unikaj umieszczania linku do oferty. Link zostanie dodany automatycznie przez bota.
+    **WAŻNE DLA OFERT SPOZA EUROPY:**
+    Jeśli oferta dotyczy regionu spoza Europy (np. Ameryki Północnej, Azji, Afryki, Australii, Ameryki Południowej), nawiąż do tego w wiadomości 'chat_msg' (a czasem też w 'channel_msg'). Dostosuj treść, aby była bardziej relewantna dla potencjalnych odbiorców w tamtym regionie, np. "Dla podróżujących z USA...", "Ktoś w Azji szuka okazji?". Bądź kreatywny.
 
+    W obu wiadomościach (channel_msg i chat_msg) unikaj umieszczania linku do oferty. Link zostanie dodany automatycznie przez bota.
 KROK 4: SELEKCJA NA CZAT:
     • Ustaw 'post_to_chat': true TYLKO dla ocen 9-10 (Hity) lub Ważnych Newsów (np. o strajkach, zmianach wizowych). Nie chcemy spamu na czacie.
 
@@ -325,31 +371,26 @@ Format odpowiedzi:
     
     user_message = "Przeanalizuj poniższe oferty:\n\n---\n".join(batch_prompt_parts)
 
-    try:
-        log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI.")
-        response = await gemini_model.generate_content_async([system_prompt, user_message])
+    log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI via retry handler.")
+    response = await gemini_api_call_with_retry(gemini_model, [system_prompt, user_message])
+
+    if not response or not response.text:
+        log.warning("Gemini API returned no response for batch after retries or due to a non-retryable error.")
+        return []
         
-        if not response.text:
-            log.warning("Gemini API returned empty response for batch.")
+    try:
+        ai_results_wrapper = json.loads(response.text)
+        ai_results = ai_results_wrapper.get("results", [])
+        
+        if not isinstance(ai_results, list):
+            log.error(f"Gemini API returned 'results' that is not a list: {ai_results}")
             return []
+        
+        log.info(f"AI processed batch and returned {len(ai_results)} results.")
+        return ai_results
 
-        try:
-            ai_results_wrapper = json.loads(response.text)
-            ai_results = ai_results_wrapper.get("results", [])
-            
-            if not isinstance(ai_results, list):
-                log.error(f"Gemini API returned 'results' that is not a list: {ai_results}")
-                return []
-            
-            log.info(f"AI processed batch and returned {len(ai_results)} results.")
-            return ai_results
-
-        except (json.JSONDecodeError, KeyError):
-            log.error(f"Gemini API returned invalid JSON or missing 'results' key for batch: {response.text[:200]}")
-            return []
-
-    except Exception as e:
-        log.error(f"Error calling Gemini API for batch: {e}")
+    except (json.JSONDecodeError, KeyError):
+        log.error(f"Gemini API returned invalid JSON or missing 'results' key for batch: {response.text[:200]}")
         return []
 
 async def generate_social_message_ai(target: str) -> str | None:
@@ -365,22 +406,16 @@ async def generate_social_message_ai(target: str) -> str | None:
         log.error(f"Invalid target for social message generation: {target}")
         return None
 
-    try:
-        log.info(f"Generating social message for {target} using Gemini AI.")
-        response = await gemini_model.generate_content_async(prompt_text)
+    log.info(f"Generating social message for {target} using Gemini AI via retry handler.")
+    response = await gemini_api_call_with_retry(gemini_model, [prompt_text])
 
-        if not response.text:
-            log.warning("Gemini API returned empty response for social message generation.")
-            return None
-
-        # Gemini returns a ContentResponse object, we need the actual text
-        message = response.text.strip()
-        log.info(f"Generated social message for {target}: {message[:70]}...")
-        return message
-
-    except Exception as e:
-        log.error(f"Error calling Gemini API for social message generation ({target}): {e}")
+    if not response or not response.text:
+        log.warning(f"Gemini API returned no response for social message generation ({target}) after retries.")
         return None
+
+    message = response.text.strip()
+    log.info(f"Generated social message for {target}: {message[:70]}...")
+    return message
 
 # ---------- PRZEBUDOWANA LOGIKA WYSYŁANIA ----------
 async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str) -> int | None:
@@ -707,7 +742,7 @@ async def process_sources_async() -> str:
             })
 
     # --- Batch Processing ---
-    BATCH_SIZE = 15
+    BATCH_SIZE = 5
     candidate_chunks = [detailed_candidates[i:i + BATCH_SIZE] for i in range(0, len(detailed_candidates), BATCH_SIZE)]
     
     all_ai_results = []
