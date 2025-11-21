@@ -116,12 +116,13 @@ def canonicalize_url(url: str) -> str:
         return url.strip()
 
 def _default_state() -> Dict[str, Any]:
-    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z"}
+    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z", "last_ai_analysis_time": "1970-01-01T00:00:00Z"}
 
 def _ensure_state_shapes(state: Dict[str, Any]):
     if "sent_links" not in state: state["sent_links"] = {}
     if "delete_queue" not in state: state["delete_queue"] = []
     if "last_social_post_time" not in state: state["last_social_post_time"] = "1970-01-01T00:00:00Z"
+    if "last_ai_analysis_time" not in state: state["last_ai_analysis_time"] = "1970-01-01T00:00:00Z"
 
 def load_state() -> Tuple[Dict[str, Any], int | None]:
     if not _blob: return (_default_state(), None)
@@ -276,13 +277,7 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
         dbg(f"Could not scrape description for {url}: {e}")
     return None
 
-def add_emojis(text: str) -> str:
-    found_emojis = []
-    text_lower = text.lower()
-    for emoji, keywords in EMOJI_KEYWORDS.items():
-        if any(keyword in text_lower for keyword in keywords):
-            found_emojis.append(emoji)
-    return ' '.join(found_emojis) + ' ' + text if found_emojis else text
+
 
 async def gemini_api_call_with_retry(model, prompt_parts, max_retries=4):
     """
@@ -720,7 +715,30 @@ async def process_sources_async() -> str:
             log.critical(f"FINAL STATE SAVE FAILED after pruning: {e}")
         return "Run complete. No new posts."
 
-    log.info(f"Found {len(candidates)} new candidates to process in batches.")
+    log.info(f"Found {len(candidates)} new candidates to process.")
+
+    # --- Time-based AI Call Caching ---
+    now_utc = datetime.now(timezone.utc)
+    last_analysis_time_str = state.get("last_ai_analysis_time", "1970-01-01T00:00:00Z")
+    try:
+        last_analysis_time = datetime.fromisoformat(last_analysis_time_str)
+    except ValueError:
+        log.warning(f"Malformed last_ai_analysis_time in state: {last_analysis_time_str}. Resetting.")
+        last_analysis_time = datetime.fromisoformat("1970-01-01T00:00:00Z")
+
+    time_since_last_analysis = now_utc - last_analysis_time
+    if time_since_last_analysis < timedelta(minutes=3):
+        log.info(f"AI analysis skipped. Last analysis was {time_since_last_analysis.total_seconds():.1f} seconds ago. Need to wait 3 minutes.")
+        # We still save the state because other things like pruning or sweeping might have happened
+        try:
+            save_state_atomic(state, generation)
+        except Exception as e:
+            log.critical(f"FINAL STATE SAVE FAILED after skipping AI analysis: {e}")
+        return "Run complete. AI analysis skipped due to 3-minute cooldown."
+    
+    log.info("Proceeding with AI analysis.")
+    state["last_ai_analysis_time"] = now_utc.isoformat()
+    # --- End Time-based Caching ---
     
     # Prepare candidates with descriptions and IDs for the AI
     detailed_candidates = []
@@ -742,16 +760,18 @@ async def process_sources_async() -> str:
             })
 
     # --- Batch Processing ---
-    BATCH_SIZE = 5
+    BATCH_SIZE = 10
     candidate_chunks = [detailed_candidates[i:i + BATCH_SIZE] for i in range(0, len(detailed_candidates), BATCH_SIZE)]
     
     all_ai_results = []
-    for chunk in candidate_chunks:
+    for i, chunk in enumerate(candidate_chunks):
         results = await analyze_batch(chunk)
         all_ai_results.extend(results)
-        if len(candidate_chunks) > 1:
-            log.info(f"Processed a chunk, waiting 1s before next batch to be safe.")
-            await asyncio.sleep(1)
+        # If there are more chunks to process, wait to avoid hitting rate limits.
+        if i < len(candidate_chunks) - 1:
+            wait_time = 1 # Wait 1 second
+            log.info(f"Processed chunk {i+1}/{len(candidate_chunks)}. Waiting {wait_time}s before next batch to respect API rate limits.")
+            await asyncio.sleep(wait_time)
 
     if not all_ai_results:
         log.warning("AI analysis returned no results for any batch.")
@@ -801,7 +821,7 @@ async def process_sources_async() -> str:
         
         if channel_message_id:
             sent_count += 1
-            state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+            # state["sent_links"] is now set earlier for all processed items
             if DELETE_AFTER_HOURS > 0:
                 remember_for_deletion(state, TELEGRAM_CHANNEL_ID, channel_message_id, original_candidate['source_url'])
             
