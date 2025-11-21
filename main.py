@@ -108,11 +108,9 @@ def canonicalize_url(url: str) -> str:
         return url.strip()
 
 def _default_state() -> Dict[str, Any]:
-    return {"sent_links": {}, "delete_queue": []}
+    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z"}
 
-def _ensure_state_shapes(state: Dict[str, Any]):
-    if "sent_links" not in state: state["sent_links"] = {}
-    if "delete_queue" not in state: state["delete_queue"] = []
+    if "last_social_post_time" not in state: state["last_social_post_time"] = "1970-01-01T00:00:00Z"
 
 def load_state() -> Tuple[Dict[str, Any], int | None]:
     if not _blob: return (_default_state(), None)
@@ -354,6 +352,36 @@ Format odpowiedzi:
         log.error(f"Error calling Gemini API for batch: {e}")
         return []
 
+async def generate_social_message_ai(target: str) -> str | None:
+    if not gemini_model:
+        log.error("Gemini AI model not initialized. Cannot generate social message.")
+        return None
+
+    if target == "channel":
+        prompt_text = "Napisz krótki, zachęcający i nieco tajemniczy post na kanał Telegram. Celem jest zachęcenie użytkowników do przejścia na powiązaną grupę czatową, aby podyskutować o najnowszych ofertach i podzielić się wrażeniami. Unikaj bezpośredniego linkowania. Bądź naturalny i kreatywny, żeby post nie wyglądał jak automat. Max 150 znaków."
+    elif target == "chat_group":
+        prompt_text = "Napisz krótki, luźny i angażujący post na grupę czatową Telegram. Celem jest zachęcenie użytkowników do sprawdzenia najnowszych, najlepszych ofert na naszym głównym kanale Telegram. Bądź naturalny i kreatywny, żeby post nie wyglądał jak automat. Dodaj jakieś zabawne emoji. Max 150 znaków."
+    else:
+        log.error(f"Invalid target for social message generation: {target}")
+        return None
+
+    try:
+        log.info(f"Generating social message for {target} using Gemini AI.")
+        response = await gemini_model.generate_content_async(prompt_text)
+
+        if not response.text:
+            log.warning("Gemini API returned empty response for social message generation.")
+            return None
+
+        # Gemini returns a ContentResponse object, we need the actual text
+        message = response.text.strip()
+        log.info(f"Generated social message for {target}: {message[:70]}...")
+        return message
+
+    except Exception as e:
+        log.error(f"Error calling Gemini API for social message generation ({target}): {e}")
+        return None
+
 # ---------- PRZEBUDOWANA LOGIKA WYSYŁANIA ----------
 async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str) -> int | None:
     async with make_async_client() as client:
@@ -526,6 +554,70 @@ async def scrape_webpage(client: httpx.AsyncClient, url: str) -> List[Tuple[str,
     except Exception as e: dbg(f"Scrape failed for {url}: {e}")
     return []
 
+async def handle_social_posts(state: Dict[str, Any], current_generation: int):
+    if not TELEGRAM_CHANNEL_ID or not TELEGRAM_CHAT_GROUP_ID or not TELEGRAM_CHANNEL_USERNAME:
+        log.warning("Skipping social posts: TELEGRAM_CHANNEL_ID, TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
+        return
+
+    # Check for quiet hours (23:00 to 09:00 UTC)
+    now_utc = datetime.now(timezone.utc)
+    if 23 <= now_utc.hour or now_utc.hour < 9:
+        log.info("Skipping social posts during quiet hours (23:00-09:00 UTC).")
+        return
+
+    # Check if enough time has passed (2 hours)
+    last_post_time_str = state.get("last_social_post_time", "1970-01-01T00:00:00Z")
+    try:
+        last_post_time = datetime.fromisoformat(last_post_time_str)
+    except ValueError:
+        log.warning(f"Malformed last_social_post_time in state: {last_post_time_str}. Resetting.")
+        last_post_time = datetime.fromisoformat("1970-01-01T00:00:00Z") # Reset to trigger new post
+
+    time_since_last_post = now_utc - last_post_time
+    if time_since_last_post < timedelta(hours=2):
+        log.info(f"Not yet time for a social post. Last post: {last_post_time_str}. Time since: {time_since_last_post}")
+        return
+
+    log.info("Initiating social engagement post sequence.")
+    telegram_channel_link = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}"
+    
+    # Generate and send channel message
+    channel_msg = await generate_social_message_ai("channel")
+    if channel_msg:
+        log.info("Sending social channel message.")
+        await send_telegram_message_async(
+            message_content=channel_msg,
+            link=telegram_channel_link, # Link to channel for social post
+            host="telegram.org",
+            chat_id=TELEGRAM_CHANNEL_ID
+        )
+        await asyncio.sleep(random.uniform(0.5, 1.5)) # Small delay between posts
+
+    # Generate and send chat group message
+    chat_group_msg = await generate_social_message_ai("chat_group")
+    if chat_group_msg:
+        log.info("Sending social chat group message.")
+        await send_telegram_message_async(
+            message_content=chat_group_msg,
+            link=telegram_channel_link, # Link to channel for social post
+            host="telegram.org",
+            chat_id=TELEGRAM_CHAT_GROUP_ID
+        )
+        await asyncio.sleep(random.uniform(0.5, 1.5)) # Small delay to avoid API limits if both are sent
+
+    # Update last_social_post_time and save state
+    state["last_social_post_time"] = now_utc.isoformat()
+    try:
+        # We need to reload state/generation to ensure atomic update after previous saves if any
+        # This function might be called multiple times in a single run of process_sources_async
+        # if there are many offers, so it's safer to load and save its own state changes.
+        current_state, current_generation = load_state()
+        current_state["last_social_post_time"] = state["last_social_post_time"]
+        save_state_atomic(current_state, current_generation)
+        log.info(f"Updated last_social_post_time to {state['last_social_post_time']}.")
+    except Exception as e:
+        log.error(f"Failed to save state after social post: {e}")
+
 # ---------- GŁÓWNA LOGIKA (Używamy ostatniej, prostej wersji) ----------
 async def process_sources_async() -> str:
     log.info("Starting a simple RSS-only processing run...")
@@ -653,6 +745,8 @@ async def process_sources_async() -> str:
             log.warning(f"AI returned a result with ID {result_id} that does not match any original candidate.")
             continue
             
+        state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+
         # Ensure is_good is correctly set based on score (AI might sometimes err)
         is_good_flag = ai_result.get("is_good", False)
         if ai_result.get("score", 0) < 7:
@@ -712,6 +806,12 @@ async def process_sources_async() -> str:
         except Exception as e:
             log.critical(f"FINAL STATE SAVE FAILED: {e}")
             return "Critical: State save failed."
+            
+    # After all offer processing, run social engagement posts
+    try:
+        await handle_social_posts(state, generation)
+    except Exception as e:
+        log.error(f"Error in final social posts handler: {e}")
             
     return f"Run complete. Found {len(all_posts)} posts, sent {sent_count} new messages."
 
