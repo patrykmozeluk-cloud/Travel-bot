@@ -1,4 +1,4 @@
-httpx
+httpx[http2]
 feedparser
 orjson
 google-cloud-storage

@@ -325,6 +325,9 @@ async def audit_offer_with_perplexity(title: str, description: str | None) -> Di
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
         return {'is_active': False, 'verdict': 'SKIPPED', 'market_context': 'Perplexity API key not configured.', 'reason_code': 'NO_API_KEY'}
 
+    # DIAGNOSTIC LOG: Check the length of the key being used.
+    log.info(f"DEBUG: Perplexity key read. Length: {len(PERPLEXITY_API_KEY) if PERPLEXITY_API_KEY else 'None / 0'}")
+
     try:
         client = AsyncPerplexity(api_key=PERPLEXITY_API_KEY)
         
@@ -343,7 +346,7 @@ async def audit_offer_with_perplexity(title: str, description: str | None) -> Di
         }
 
         response = await client.chat.completions.create(
-            model="sonar-small-online",
+            model="mistral-7b-instruct",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
