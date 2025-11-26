@@ -1,6 +1,6 @@
 # OSTATECZNA WERSJA - 1 PAŹ 2025 v5 (dla pliku main.py)
-# 1. Użyj oficjalnego, lekkiego obrazu Pythona
-FROM python:3.13-slim
+# 1. Użyj oficjalnego, lekkiego i STABILNEGO obrazu Pythona
+FROM python:3.11-slim
 
 # 2. Ustaw zmienną środowiskową, aby logy pojawiały się od razu
 ENV PYTHONUNBUFFERED True

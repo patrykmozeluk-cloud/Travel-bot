@@ -12,6 +12,7 @@ import html
 from flask import Flask, request, jsonify
 from google.cloud import storage 
 import google.generativeai as genai # For Gemini AI integration
+from perplexity import AsyncPerplexity
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
 from typing import Dict, Any, Tuple, List
@@ -35,7 +36,9 @@ TG_TOKEN = env("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = env("TELEGRAM_CHANNEL_ID") # Renamed from TG_CHAT_ID
 TELEGRAM_CHAT_GROUP_ID = env("TELEGRAM_CHAT_GROUP_ID") # New for AI-selected posts
 TELEGRAM_CHANNEL_USERNAME = env("TELEGRAM_CHANNEL_USERNAME") # New for linking to channel messages
+CHAT_CHANNEL_URL = env("CHAT_CHANNEL_URL") # New for CTA button in VIP messages
 GEMINI_API_KEY = env("GEMINI_API_KEY") # New for Gemini AI
+PERPLEXITY_API_KEY = env("PERPLEXITY_API_KEY") # New for Perplexity AI audit
 BUCKET_NAME = env("BUCKET_NAME")
 SENT_LINKS_FILE = env("SENT_LINKS_FILE", "sent_links.json")
 HTTP_TIMEOUT = float(env("HTTP_TIMEOUT", "15.0"))
@@ -312,6 +315,52 @@ async def gemini_api_call_with_retry(model, prompt_parts, max_retries=4):
 
     return None # Should be unreachable, but as a fallback
 
+
+async def audit_offer_with_perplexity(title: str, description: str | None) -> Dict[str, Any]:
+    """
+    Uses Perplexity API (via SDK) to audit a high-scoring offer.
+    Returns a dictionary with 'is_active', 'verdict', etc.
+    """
+    if not PERPLEXITY_API_KEY:
+        log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
+        return {'is_active': False, 'verdict': 'SKIPPED', 'market_context': 'Perplexity API key not configured.', 'reason_code': 'NO_API_KEY'}
+
+    try:
+        client = AsyncPerplexity(api_key=PERPLEXITY_API_KEY)
+        
+        system_prompt = "Jesteś analitykiem rynku turystycznego. Twoim zadaniem jest błyskawiczna weryfikacja czy podana oferta jest wciąż aktywna. Sprawdź podany link i oceń realną dostępność oferty. Porównaj też jej cenę z aktualnymi warunkami rynkowymi. Odpowiedz ZAWSZE w formacie JSON, zawierającym klucze: 'is_active' (boolean), 'verdict' (string, np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'), 'market_context' (string, krótka analiza), oraz 'reason_code' (string, np. 'ACTIVE_OK', 'EXPIRED', 'API_ERROR')."
+        user_prompt = f"Tytuł oferty: {title}\nOpis: {description or 'Brak opisu.'}"
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "is_active": {"type": "boolean", "description": "Status aktywności oferty."},
+                "verdict": {"type": "string", "description": "Werdykt np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'."},
+                "market_context": {"type": "string", "description": "Analiza rynkowa/uzasadnienie."},
+                "reason_code": {"type": "string", "description": "Kod błędu lub statusu, np. 'ACTIVE_OK', 'EXPIRED', 'API_ERROR'."},
+            },
+            "required": ["is_active", "verdict", "market_context", "reason_code"]
+        }
+
+        response = await client.chat.completions.create(
+            model="sonar-small-online",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_schema", "json_schema": {"schema": json_schema}},
+        )
+        
+        # The SDK with json_schema should return a parsed JSON object directly.
+        audit_result = json.loads(response.choices[0].message.content)
+
+        log.info(f"Perplexity audit for '{title[:30]}...' successful. Active: {audit_result.get('is_active')}")
+        return audit_result
+
+    except Exception as e:
+        log.error(f"Perplexity API audit failed for '{title[:30]}...'. Error: {e}", exc_info=True)
+        return {'is_active': False, 'verdict': 'ERROR', 'market_context': f'API call failed: {e}', 'reason_code': 'SDK_EXCEPTION'}
+
 async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not gemini_model:
         log.error("Gemini AI model not initialized. Skipping AI analysis.")
@@ -331,7 +380,8 @@ KROK 1: KONTEKST ŹRÓDŁA (Dostosuj perspektywę):
 KROK 2: OCENA (1-10):
     • 9-10: Mega Hit, Error Fare, Biznes w cenie Economy, Ważny News (strajki, wizy, zmiany w przepisach).
     • 7-8: Dobra, solidna oferta.
-    • 1-6: Przeciętna cena, reklama, spam. (ODRZUĆ, is_good: false).
+    • 6: Wystarczająco dobra, żeby wrzucić na czat.
+    • 1-5: Przeciętna cena, reklama, spam. (ODRZUĆ, is_good: false).
 
     KROK 3: GENEROWANIE TREŚCI (Dwa Warianty):
     • 'channel_msg': Styl dziennikarski, informacyjny, konkretne daty, ceny, miejsca docelowe, emoji. Max 200 znaków.
@@ -394,15 +444,35 @@ async def generate_social_message_ai(target: str) -> str | None:
         return None
 
     if target == "channel":
+        # This target is no longer used in the new strategy, but we keep the prompt for potential future use.
         prompt_text = "Napisz krótki, zachęcający i nieco tajemniczy post na kanał Telegram. Celem jest zachęcenie użytkowników do przejścia na powiązaną grupę czatową, aby podyskutować o najnowszych ofertach i podzielić się wrażeniami. Unikaj bezpośredniego linkowania. Bądź naturalny i kreatywny, żeby post nie wyglądał jak automat. Max 150 znaków."
     elif target == "chat_group":
-        prompt_text = "Napisz krótki, luźny i angażujący post na grupę czatową Telegram. Celem jest zachęcenie użytkowników do sprawdzenia najnowszych, najlepszych ofert na naszym głównym kanale Telegram. Bądź naturalny i kreatywny, żeby post nie wyglądał jak automat. Dodaj jakieś zabawne emoji. Max 150 znaków."
+        prompt_text = """
+Jesteś community managerem kanału o tanich lotach. Twoim zadaniem jest napisanie krótkiego, angażującego posta na GRUPĘ CZATOWĄ, który zachęci użytkowników do sprawdzenia głównego KANAŁU VIP, gdzie publikowane są tylko najlepsze, zweryfikowane okazje.
+
+Bądź kreatywny i naturalny. Twój post powinien być inspirowany jedną z poniższych idei:
+- Idea 1: Podkreśl, że na czacie jest duży ruch ("przemial"), a na kanale jest czysta jakość.
+- Idea 2: Użyj metafory szukania "igły w stogu siana" i wskaż, że na kanale są już te znalezione "igły".
+- Idea 3: Zagraj na strachu przed przegapieniem (FOMO) - na kanale są pewniaki, których nie można przegapić.
+- Idea 4: Użyj zwięzłego, chwytliwego hasła rozróżniającego cel czatu (dyskusje) i kanału (konkretne oferty).
+
+Przykłady inspiracji (nie kopiuj ich 1:1):
+"🌪️ Ale dzisiaj przemiał! Jeśli wolisz samą jakość bez spamu, wbijaj na nasz KANAŁ VIP. Tam tylko zweryfikowane hity."
+"🧐 Szukasz igły w stogu siana? My już ją znaleźliśmy! Najlepsze okazje (9/10) lądują na KANALE. Tutaj zostawiamy strumień dla łowców."
+"🚀 Boisz się, że najlepsza oferta zginie w tłumie? Włącz powiadomienia na KANALE - tam trafiają tylko pewniaki!"
+"💎 Czat jest do gadania, Kanał jest do latania! Zweryfikowane okazje znajdziesz na Kanale."
+"""
     else:
         log.error(f"Invalid target for social message generation: {target}")
         return None
 
+    system_prompt = """
+Twoim zadaniem jest wygenerowanie posta na Telegram.
+Odpowiedź ZAWSZE w formacie JSON, zawierającym jeden klucz: "post".
+Przykład: {"post": "Treść Twojego kreatywnego posta tutaj."}
+"""
     log.info(f"Generating social message for {target} using Gemini AI via retry handler.")
-    response = await gemini_api_call_with_retry(gemini_model, [prompt_text])
+    response = await gemini_api_call_with_retry(gemini_model, [system_prompt, prompt_text])
 
     if not response or not response.text:
         log.warning(f"Gemini API returned no response for social message generation ({target}) after retries.")
@@ -413,25 +483,60 @@ async def generate_social_message_ai(target: str) -> str | None:
     return message
 
 # ---------- PRZEBUDOWANA LOGIKA WYSYŁANIA ----------
-async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str) -> int | None:
+
+async def send_social_telegram_message_async(message_content: str, chat_id: str, button_text: str, button_url: str) -> int | None:
+    """Wysyła wiadomość na Telegram z jednym przyciskiem Inline Keyboard."""
     async with make_async_client() as client:
         try:
-            safe_text = html.escape(message_content, quote=False)
-
-            # UPROSZCZENIE: Usunięto logikę warunkową dla PIRATES_HOSTS.
-            # Teraz każda wiadomość jest wysyłana w ten sam, spójny sposób.
-            text = f"{safe_text}\n\n<a href='{link}'>👉 Zobacz ofertę</a>"
-            payload, method = {"text": text, "disable_web_page_preview": False}, "sendMessage"
-
-            payload.update({"chat_id": chat_id, "parse_mode": "HTML"})
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
+            payload = {
+                "chat_id": chat_id,
+                "text": message_content,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": button_text, "url": button_url}
+                    ]]
+                }
+            }
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
             
             r = await client.post(url, json=payload, timeout=HTTP_TIMEOUT)
             r.raise_for_status()
             body = r.json()
 
             if body.get("ok"):
-                log.info(f"Message sent: {message_content[:60]}… (method={method})")
+                log.info(f"Social message sent: {message_content[:60]}…")
+                return body.get("result", {}).get("message_id")
+            else:
+                log.error(f"Telegram returned ok=false for social message: {body}")
+        except Exception as e:
+            log.error(f"Telegram send error for social message to {chat_id}: {e}")
+    return None
+
+async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str, reply_markup: Dict[str, Any] | None = None) -> int | None:
+    async with make_async_client() as client:
+        try:
+            safe_text = html.escape(message_content, quote=False)
+
+            text = f"{safe_text}\n\n<a href='{link}'>👉 Zobacz ofertę</a>"
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False
+            }
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+            
+            r = await client.post(url, json=payload, timeout=HTTP_TIMEOUT)
+            r.raise_for_status()
+            body = r.json()
+
+            if body.get("ok"):
+                log.info(f"Message sent: {message_content[:60]}…")
                 return body.get("result", {}).get("message_id")
             else:
                 log.error(f"Telegram returned ok=false: {body}")
@@ -609,31 +714,42 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
         return
 
     log.info("Initiating social engagement post sequence.")
-    telegram_channel_link = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}"
     
-    # Generate and send channel message
-    channel_msg = await generate_social_message_ai("channel")
-    if channel_msg:
-        log.info("Sending social channel message.")
-        await send_telegram_message_async(
-            message_content=channel_msg,
-            link=telegram_channel_link, # Link to channel for social post
-            host="telegram.org",
-            chat_id=TELEGRAM_CHANNEL_ID
-        )
-        await asyncio.sleep(random.uniform(0.5, 1.5)) # Small delay between posts
+    # --- Post na Kanał (zachęta do dyskusji na czacie) ---
+    channel_msg_raw = await generate_social_message_ai("channel")
+    if channel_msg_raw:
+        try:
+            channel_data = json.loads(channel_msg_raw)
+            channel_msg = channel_data.get("post", channel_msg_raw)
+        except json.JSONDecodeError:
+            channel_msg = channel_msg_raw
 
-    # Generate and send chat group message
-    chat_group_msg = await generate_social_message_ai("chat_group")
-    if chat_group_msg:
-        log.info("Sending social chat group message.")
-        await send_telegram_message_async(
-            message_content=chat_group_msg,
-            link=telegram_channel_link, # Link to channel for social post
-            host="telegram.org",
-            chat_id=TELEGRAM_CHAT_GROUP_ID
+        log.info("Sending social channel message with inline button.")
+        await send_social_telegram_message_async(
+            message_content=channel_msg,
+            chat_id=TELEGRAM_CHANNEL_ID,
+            button_text="💬 Wejdź na czat / Komentarze",
+            button_url=CHAT_CHANNEL_URL or "https://t.me/+iKncwXtipa02MWNk" # Fallback link
         )
-        await asyncio.sleep(random.uniform(0.5, 1.5)) # Small delay to avoid API limits if both are sent
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+
+    # --- Post na Czat (zachęta do sprawdzania kanału VIP) ---
+    chat_group_msg_raw = await generate_social_message_ai("chat_group")
+    if chat_group_msg_raw:
+        try:
+            chat_group_data = json.loads(chat_group_msg_raw)
+            chat_group_msg = chat_group_data.get("post", chat_group_msg_raw)
+        except json.JSONDecodeError:
+            chat_group_msg = chat_group_msg_raw
+
+        log.info("Sending social chat group message with inline button.")
+        await send_social_telegram_message_async(
+            message_content=chat_group_msg,
+            chat_id=TELEGRAM_CHAT_GROUP_ID,
+            button_text="👉 Sprawdź Kanał VIP",
+            button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}"
+        )
+        await asyncio.sleep(random.uniform(0.5, 1.5))
 
     # Update last_social_post_time and save state
     state["last_social_post_time"] = now_utc.isoformat()
@@ -760,7 +876,7 @@ async def process_sources_async() -> str:
             })
 
     # --- Batch Processing ---
-    BATCH_SIZE = 10
+    BATCH_SIZE = 5
     candidate_chunks = [detailed_candidates[i:i + BATCH_SIZE] for i in range(0, len(detailed_candidates), BATCH_SIZE)]
     
     all_ai_results = []
@@ -787,13 +903,13 @@ async def process_sources_async() -> str:
     # Create a mapping from ID to original candidate data
     candidates_by_id = {c['id']: c for c in detailed_candidates}
 
-    sent_count = 0
+    sent_count_channel = 0
+    sent_count_chat = 0
     now_utc_iso = datetime.now(timezone.utc).isoformat()
     
     for ai_result in all_ai_results:
         result_id = ai_result.get("id")
-        if result_id is None:
-            continue
+        if result_id is None: continue
 
         original_candidate = candidates_by_id.get(result_id)
         if not original_candidate:
@@ -801,63 +917,87 @@ async def process_sources_async() -> str:
             continue
             
         state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
-
-        # Ensure is_good is correctly set based on score (AI might sometimes err)
-        is_good_flag = ai_result.get("is_good", False)
-        if ai_result.get("score", 0) < 7:
-            is_good_flag = False
-
-        if not is_good_flag:
-            log.info(f"AI deemed '{original_candidate['title'][:50]}...' not good (score: {ai_result.get('score', 'N/A')}). Skipping.")
-            continue
-
-        # --- Send to Channel ---
-        channel_message_id = await send_telegram_message_async(
-            message_content=ai_result.get("channel_msg") or original_candidate['title'],
-            link=original_candidate['link'],
-            host=original_candidate['host'],
-            chat_id=TELEGRAM_CHANNEL_ID
-        )
         
-        if channel_message_id:
-            sent_count += 1
-            # state["sent_links"] is now set earlier for all processed items
-            if DELETE_AFTER_HOURS > 0:
-                remember_for_deletion(state, TELEGRAM_CHANNEL_ID, channel_message_id, original_candidate['source_url'])
+        offer_score = ai_result.get("score", 0)
+        offer_title = original_candidate['title']
+        
+        # --- ŚCIEŻKA 1: Czat Ogólny (oceny 6, 7, 8) ---
+        if 6 <= offer_score <= 8:
+            log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for Chat Group.")
+            chat_text = ai_result.get("chat_msg") or f"Nowa oferta: {offer_title}"
             
-            log.info(f"Channel message for '{original_candidate['title'][:50]}...' sent and recorded.")
+            chat_message_id = await send_telegram_message_async(
+                message_content=chat_text,
+                link=original_candidate['link'],
+                host=original_candidate['host'],
+                chat_id=TELEGRAM_CHAT_GROUP_ID
+            )
+            if chat_message_id:
+                sent_count_chat += 1
+                if DELETE_AFTER_HOURS > 0:
+                    remember_for_deletion(state, TELEGRAM_CHAT_GROUP_ID, chat_message_id, original_candidate['source_url'])
+                log.info(f"Successfully sent to Chat Group and queued for deletion.")
 
-            # --- Conditional Send to Chat Group ---
-            post_to_chat_flag = ai_result.get("post_to_chat", False)
-            if ai_result.get("score", 0) < 9: # Enforce rule: only 9+ for chat
-                 post_to_chat_flag = False
+        # --- ŚCIEŻKA 2: Lejek VIP (oceny 9 i 10) ---
+        elif offer_score >= 9:
+            log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for VIP Channel. Auditing with Perplexity...")
+            audit_result = await audit_offer_with_perplexity(offer_title, original_candidate.get("description"))
 
-            if post_to_chat_flag:
-                chat_text = ai_result.get("chat_msg") or f"Nowa super oferta: {original_candidate['title'][:50]}..."
+            # --- Jeśli audyt się powiedzie -> Kanał VIP ---
+            if audit_result.get("is_active"):
+                log.info(f"Perplexity confirmed offer is active. Verdict: {audit_result.get('verdict')}. Posting to VIP Channel.")
+                market_context = audit_result.get('market_context', 'Weryfikacja pomyślna.')
+                vip_message = f"💎 {offer_title}\n\n✅ **ZWERYFIKOWANO**: {market_context}"
                 
-                # 30% chance to add "Więcej na kanale" link
-                if random.random() < 0.3 and TELEGRAM_CHANNEL_USERNAME:
-                    channel_link = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}/{channel_message_id}"
-                    chat_text += f"\n\n👉 Więcej na kanale: {channel_link}"
+                # Przygotowanie przycisku CTA
+                cta_button = None
+                if CHAT_CHANNEL_URL:
+                    cta_button = {
+                        "inline_keyboard": [[
+                            {"text": "Więcej ofert high-volume znajdziesz na naszym głównym CZACIE!", "url": CHAT_CHANNEL_URL}
+                        ]]
+                    }
+
+                channel_message_id = await send_telegram_message_async(
+                    message_content=vip_message,
+                    link=original_candidate['link'],
+                    host=original_candidate['host'],
+                    chat_id=TELEGRAM_CHANNEL_ID,
+                    reply_markup=cta_button
+                )
                 
-                log.info(f"Attempting to send chat message for '{original_candidate['title'][:50]}...'.")
-                await send_telegram_message_async(
+                if channel_message_id:
+                    sent_count_channel += 1
+                    if DELETE_AFTER_HOURS > 0:
+                        remember_for_deletion(state, TELEGRAM_CHANNEL_ID, channel_message_id, original_candidate['source_url'])
+                    log.info(f"Successfully sent VIP message to Channel and queued for deletion.")
+            
+            # --- Jeśli audyt się nie powiedzie -> Czat Ogólny (degradacja) ---
+            else:
+                log.warning(f"Perplexity audit failed or offer inactive for '{offer_title[:40]}...'. Demoting to Chat Group.")
+                chat_text = ai_result.get("chat_msg") or f"Nowa oferta: {offer_title}"
+                
+                chat_message_id = await send_telegram_message_async(
                     message_content=chat_text,
                     link=original_candidate['link'],
                     host=original_candidate['host'],
                     chat_id=TELEGRAM_CHAT_GROUP_ID
                 )
-        else:
-            log.warning(f"Failed to send channel message for '{original_candidate['title'][:50]}...'. Not processing for chat either.")
-        
-        # Add a small, random delay between each Telegram message to avoid hitting Telegram's own limits
+                if chat_message_id:
+                    sent_count_chat += 1
+                    if DELETE_AFTER_HOURS > 0:
+                        remember_for_deletion(state, TELEGRAM_CHAT_GROUP_ID, chat_message_id, original_candidate['source_url'])
+                    log.info(f"Successfully sent demoted VIP offer to Chat Group and queued for deletion.")
+
+        # Add a small, random delay between each candidate to avoid hitting Telegram's own limits
         await asyncio.sleep(random.uniform(0.2, 0.5))
 
-    if sent_count > 0:
+    total_sent = sent_count_channel + sent_count_chat
+    if total_sent > 0:
         prune_sent_links(state)
         try: 
             save_state_atomic(state, generation)
-            log.info(f"Successfully saved state for {sent_count} new items.")
+            log.info(f"Successfully saved state for {total_sent} new items ({sent_count_channel} to channel, {sent_count_chat} to chat).")
         except Exception as e:
             log.critical(f"FINAL STATE SAVE FAILED: {e}")
             return "Critical: State save failed."
@@ -868,7 +1008,7 @@ async def process_sources_async() -> str:
     except Exception as e:
         log.error(f"Error in final social posts handler: {e}")
             
-    return f"Run complete. Found {len(all_posts)} posts, sent {sent_count} new messages."
+    return f"Run complete. Found {len(all_posts)} posts, sent {sent_count_channel} to channel and {sent_count_chat} to chat group."
 
 
 # ---------- FLASK ROUTES (Bez zmian) ----------

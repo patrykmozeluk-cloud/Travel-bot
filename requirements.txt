@@ -1,9 +1,9 @@
-flask
-google-cloud-storage
-httpx[http2]
+httpx
 feedparser
 orjson
-beautifulsoup4
-gunicorn
-google-cloud-logging
+google-cloud-storage
 google-generativeai
+beautifulsoup4
+Flask
+perplexityai
+gunicorn
