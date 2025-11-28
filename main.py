@@ -417,15 +417,15 @@ KROK 4: GENEROWANIE TREŚCI:
     • `chat_msg`: Wiadomość w formacie Markdown, ściśle według poniższego szablonu. Bądź kreatywny przy tworzeniu opisu.
 
       Format `chat_msg` (Markdown):
-      `[EMOJI_FLAGI] *[KIERUNEK]* (✈️ z: [MIASTO_WYLOTU])`
+      `[EMOJI_FLAGI] **[KIERUNEK]** (✈️ z: [MIASTO_WYLOTU])`
       `📅 Termin: [DATA_LUB_MIESIĄC]`
-      `💰 Cena: *[CENA]*`
+      `💰 Cena: **[CENA]**`
       ``
       `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU - max 200 znaków]`
       `───────────────`
 
       Przykład `chat_msg`:
-      "🇪🇸 *Majorka* (✈️ z: Berlina)\\n📅 Termin: 12-19 Maja\\n💰 Cena: *850 PLN*\\n\\n📝 Spędź tydzień na słonecznej Majorce w świetnej cenie przed szczytem sezonu. Wylot z Berlina gwarantuje niższe koszty i dogodne godziny lotów.\\n───────────────"
+      "🇪🇸 **Majorka** (✈️ z: Berlina)\\n📅 Termin: 12-19 Maja\\n💰 Cena: **850 PLN**\\n\\n📝 Spędź tydzień na słonecznej Majorce w świetnej cenie przed szczytem sezonu. Wylot z Berlina gwarantuje niższe koszty i dogodne godziny lotów.\\n───────────────"
 
 KROK 5: SELEKCJA NA CZAT:
     • Ustaw 'post_to_chat': true TYLKO dla ocen 9-10 (Hity) lub Ważnych Newsów (np. o strajkach, zmianach wizowych). Nie chcemy spamu na czacie.
@@ -581,23 +581,15 @@ async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: st
     return None
 
 async def send_telegram_message_async(message_content: str, link: str, chat_id: str) -> int | None:
-    """Wysyła wiadomość sformatowaną w MarkdownV2 z przyciskiem Inline."""
+    """Wysyła wiadomość sformatowaną w (legacy) Markdown z przyciskiem Inline."""
     async with make_async_client() as client:
         try:
-            # Gemini dostarcza treść już w formacie Markdown, gotową do wysłania.
-            # Należy uważać na znaki specjalne, które MarkdownV2 wymaga escape'owania.
-            # Prompt dla Gemini musi być tak skonstruowany, aby generował poprawny Markdown.
-            # Telegram wymaga escape'owania: '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
-            
-            # Prosta funkcja do escape'owania, jeśli Gemini by sobie nie radził.
-            def escape_markdown(text: str) -> str:
-                escape_chars = r'_*[]()~`>#+-=|{}.!'
-                return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
-
+            # Używamy starszego, bardziej liberalnego trybu "Markdown", który jest mniej podatny na błędy
+            # niż "MarkdownV2". Gemini jest poinstruowane, aby generować kompatybilną treść.
             payload = {
                 "chat_id": chat_id,
                 "text": message_content,
-                "parse_mode": "MarkdownV2",
+                "parse_mode": "Markdown",
                 "disable_web_page_preview": True,
                 "reply_markup": {
                     "inline_keyboard": [[
@@ -617,7 +609,6 @@ async def send_telegram_message_async(message_content: str, link: str, chat_id: 
                 return body.get("result", {}).get("message_id")
             else:
                 log.error(f"Telegram returned ok=false: {body}")
-                # Jeśli błąd dotyczy parsowania, zaloguj treść, która spowodowała problem
                 if body.get("description") and "can't parse entities" in body["description"]:
                     log.warning(f"MARKDOWN PARSE ERROR. Offending text was: \n---\n{message_content}\n---")
 
@@ -809,7 +800,7 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
             message_content=chat_group_msg,
             chat_id=TELEGRAM_CHAT_GROUP_ID,
             button_text="👉 Sprawdź Kanał VIP",
-            button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.replace('@', '')}"
+            button_url="https://t.me/agregator_inspiracji"
         )
         await asyncio.sleep(random.uniform(0.5, 1.5))
 
