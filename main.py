@@ -414,18 +414,48 @@ KROK 3: KLASYFIKACJA TREŚCI:
 
 KROK 4: GENEROWANIE TREŚCI:
     • `channel_msg`: Krótki, dziennikarski styl, max 200 znaków. Idealny jako tytuł do podsumowania.
-    • `chat_msg`: Wiadomość w formacie Markdown, ściśle według poniższego szablonu. Bądź kreatywny przy tworzeniu opisu.
+    • `chat_msg`: Wiadomość w formacie Markdown. Wybierz jeden z poniższych szablonów, który najlepiej pasuje do oferty. Bądź kreatywny przy tworzeniu opisu.
 
-      Format `chat_msg` (Markdown):
-      `[EMOJI_FLAGI] **[KIERUNEK]** (✈️ z: [MIASTO_WYLOTU])`
+      ---
+      **Szablon 1: LOTY**
+      `✈️ **[KIERUNEK]** (z: [MIASTO_WYLOTU])`
       `📅 Termin: [DATA_LUB_MIESIĄC]`
       `💰 Cena: **[CENA]**`
       ``
-      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU - max 200 znaków]`
+      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU]`
       `───────────────`
 
-      Przykład `chat_msg`:
-      "🇪🇸 **Majorka** (✈️ z: Berlina)\\n📅 Termin: 12-19 Maja\\n💰 Cena: **850 PLN**\\n\\n📝 Spędź tydzień na słonecznej Majorce w świetnej cenie przed szczytem sezonu. Wylot z Berlina gwarantuje niższe koszty i dogodne godziny lotów.\\n───────────────"
+      ---
+      **Szablon 2: PAKIETY (Lot + Hotel)**
+      `🌴 **[KIERUNEK]** (Pakiet z: [MIASTO_WYLOTU])`
+      `📅 Termin: [DATA_LUB_MIESIĄC]`
+      `💰 Cena: **[CENA]** (za pakiet)`
+      ``
+      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU]`
+      `───────────────`
+
+      ---
+      **Szablon 3: HOTELE / NOCLEGI**
+      `🏨 **[NAZWA HOTELU]** w [MIEJSCOWOŚĆ]`
+      `📅 Dostępność: [DATA_LUB_MIESIĄC]`
+      `💰 Cena: **[CENA]** (za noc)`
+      ``
+      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU]`
+      `───────────────`
+
+      ---
+      **Szablon 4: WYCIECZKI / WYDARZENIA / INNE**
+      `🎟️ **[NAZWA WYDARZENIA / ATRAKCJI]** w [MIEJSCOWOŚĆ]`
+      `📅 Kiedy: [DATA_LUB_MIESIĄC]`
+      `💰 Cena: **[CENA]** (wstęp/bilet)`
+      ``
+      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU]`
+      `───────────────`
+
+      ---
+      **Zasady dodatkowe:**
+      - **Zasada dla Daty:** Jeśli nie ma konkretnej daty, ale jest zakres (np. styczeń-marzec), użyj go. Jeśli nie ma żadnych informacji o dacie, napisz "Różne terminy". Nigdy nie pisz "Brak danych".
+      - Jeśli oferta nie pasuje idealnie do żadnego szablonu, użyj najbardziej zbliżonego i logicznie go dostosuj.
 
 KROK 5: SELEKCJA NA CZAT:
     • Ustaw 'post_to_chat': true TYLKO dla ocen 9-10 (Hity) lub Ważnych Newsów (np. o strajkach, zmianach wizowych). Nie chcemy spamu na czacie.
@@ -450,7 +480,7 @@ Format odpowiedzi:
             f"Opis: {candidate['description'] or 'Brak opisu.'}"
         )
     
-    user_message = "Przeanalizuj poniższe oferty:\n\n---\n".join(batch_prompt_parts)
+    user_message = "\n---\n".join(batch_prompt_parts)
 
     log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI via retry handler.")
     response = await gemini_api_call_with_retry(gemini_model, [system_prompt, user_message])
@@ -800,7 +830,7 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
             message_content=chat_group_msg,
             chat_id=TELEGRAM_CHAT_GROUP_ID,
             button_text="👉 Sprawdź Kanał VIP",
-            button_url="https://t.me/agregator_inspiracji"
+            button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
         )
         await asyncio.sleep(random.uniform(0.5, 1.5))
 
@@ -867,6 +897,7 @@ async def publish_digest_async() -> str:
         content_html += f"<h4>{html.escape(title_for_digest)}</h4>"
         content_html += f"<p><b>Werdykt:</b> {html.escape(str(verdict))}</p>"
         content_html += f"<p><i>Analiza:</i> {html.escape(str(market_context))}</p>"
+        content_html += f"<p><b>Źródło:</b> {html.escape(source_name)}</p>" # New line
         content_html += f"<p><a href='{html.escape(link)}'>👉 SPRAWDŹ OFERTĘ</a></p>"
         content_html += "<hr/>" # Visual separator
 
