@@ -4,7 +4,7 @@ import logging
 import asyncio
 import httpx
 import feedparser
-import orjson
+import json # For safe JSON parsing of AI responses
 import json # For safe JSON parsing of AI responses
 import time
 import random
@@ -12,7 +12,7 @@ import html
 from flask import Flask, request, jsonify
 from google.cloud import storage 
 import google.generativeai as genai # For Gemini AI integration
-from perplexity import AsyncPerplexity
+from telegraph import Telegraph
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
 from typing import Dict, Any, Tuple, List
@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 # ---------- APP / GCS ----------
 app = Flask(__name__)
 storage_client = storage.Client()
-# Usunięto vision_client
 
 # ---------- ENV ----------
 def env(name: str, default: Any = None) -> Any:
@@ -37,6 +36,7 @@ TELEGRAM_CHANNEL_ID = env("TELEGRAM_CHANNEL_ID") # Renamed from TG_CHAT_ID
 TELEGRAM_CHAT_GROUP_ID = env("TELEGRAM_CHAT_GROUP_ID") # New for AI-selected posts
 TELEGRAM_CHANNEL_USERNAME = env("TELEGRAM_CHANNEL_USERNAME") # New for linking to channel messages
 CHAT_CHANNEL_URL = env("CHAT_CHANNEL_URL") # New for CTA button in VIP messages
+TELEGRAPH_TOKEN = env("TELEGRAPH_TOKEN")
 GEMINI_API_KEY = env("GEMINI_API_KEY") # New for Gemini AI
 PERPLEXITY_API_KEY = env("PERPLEXITY_API_KEY") # New for Perplexity AI audit
 BUCKET_NAME = env("BUCKET_NAME")
@@ -55,6 +55,13 @@ JITTER_MIN_MS = int(env("JITTER_MIN_MS", "120"))
 JITTER_MAX_MS = int(env("JITTER_MAX_MS", "400"))
 
 SECRETFLYING_HOST = "secretflying.com"
+
+# ---------- DIGEST IMAGES (USER-PROVIDED) ----------
+DIGEST_IMAGE_URLS = [
+    "https://images.unsplash.com/photo-1516483638261-f4dbaf036963?q=80&w=2800&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D", # Ocean wave from Unsplash (full direct link)
+    "https://images.pexels.com/photos/3408744/pexels-photo-3408744.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2", # Snow-capped mountains from Pexels (direct link)
+    "https://cdn.pixabay.com/photo/2017/01/20/00/30/maldives-1993704_1280.jpg" # Maldives from Pixabay (direct link)
+]
 
 # ---------- GEMINI AI CONFIGURATION ----------
 if GEMINI_API_KEY:
@@ -119,20 +126,21 @@ def canonicalize_url(url: str) -> str:
         return url.strip()
 
 def _default_state() -> Dict[str, Any]:
-    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z", "last_ai_analysis_time": "1970-01-01T00:00:00Z"}
+    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z", "last_ai_analysis_time": "1970-01-01T00:00:00Z", "digest_candidates": []}
 
 def _ensure_state_shapes(state: Dict[str, Any]):
     if "sent_links" not in state: state["sent_links"] = {}
     if "delete_queue" not in state: state["delete_queue"] = []
     if "last_social_post_time" not in state: state["last_social_post_time"] = "1970-01-01T00:00:00Z"
     if "last_ai_analysis_time" not in state: state["last_ai_analysis_time"] = "1970-01-01T00:00:00Z"
+    if "digest_candidates" not in state: state["digest_candidates"] = []
 
 def load_state() -> Tuple[Dict[str, Any], int | None]:
     if not _blob: return (_default_state(), None)
     try:
         if not _blob.exists(): return _default_state(), None
         _blob.reload()
-        state_data = orjson.loads(_blob.download_as_bytes())
+        state_data = json.loads(_blob.download_as_bytes())
         _ensure_state_shapes(state_data)
         return state_data, _blob.generation
     except Exception as e:
@@ -141,7 +149,7 @@ def load_state() -> Tuple[Dict[str, Any], int | None]:
 
 def save_state_atomic(state: Dict[str, Any], gen: int | None):
     if not _blob: return
-    payload = orjson.dumps(state)
+    payload = json.dumps(state).encode('utf-8')
     for _ in range(10):
         try:
             _blob.upload_from_string(payload, if_generation_match=gen or 0, content_type="application/json")
@@ -265,15 +273,15 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
             if p_tag:
                 text = p_tag.get_text(separator=' ', strip=True)
                 if len(text) > 40:
-                    if len(text) > 200:
-                        # Find the last space within the first 200 characters
-                        last_space = text.rfind(' ', 0, 200)
+                    if len(text) > 500:
+                        # Find the last space within the first 500 characters
+                        last_space = text.rfind(' ', 0, 500)
                         if last_space != -1:
                             # Truncate at the last space
                             return text[:last_space] + '...'
                         else:
-                            # No space found, just truncate at 200 (fallback)
-                            return text[:200] + '...'
+                            # No space found, just truncate at 500 (fallback)
+                            return text[:500] + '...'
                     else:
                         return text
     except Exception as e:
@@ -318,51 +326,64 @@ async def gemini_api_call_with_retry(model, prompt_parts, max_retries=4):
 
 async def audit_offer_with_perplexity(title: str, description: str | None) -> Dict[str, Any]:
     """
-    Uses Perplexity API (via SDK) to audit a high-scoring offer.
+    Uses Perplexity API (via httpx) to audit a high-scoring offer.
     Returns a dictionary with 'is_active', 'verdict', etc.
     """
     if not PERPLEXITY_API_KEY:
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
         return {'is_active': False, 'verdict': 'SKIPPED', 'market_context': 'Perplexity API key not configured.', 'reason_code': 'NO_API_KEY'}
 
-    # DIAGNOSTIC LOG: Check the length of the key being used.
-    log.info(f"DEBUG: Perplexity key read. Length: {len(PERPLEXITY_API_KEY) if PERPLEXITY_API_KEY else 'None / 0'}")
+    system_prompt = "Jesteś bezkompromisowym ekspertem i GURU od wyszukiwania okazji turystycznych (deal-hunting guru). Twoim celem nie jest neutralna analiza, ale wydanie JEDNOZNACZNEJ, twardej rekomendacji. WSZYSTKIE ODPOWIEDZI MUSZĄ BYĆ PO POLSKU. Twoim zadaniem jest ocena, czy podana oferta to prawdziwa 'perełka', którą trzeba rezerwować natychmiast, czy tylko 'zapychacz'. Bądź bardzo krytyczny wobec ceny. Jeśli oferta jest tylko 'OK' lub 'przeciętna', nie wahaj się użyć werdyktu 'CENA RYNKOWA'. Werdykt 'SUPER OKAZJA' rezerwuj tylko dla absolutnych hitów. Sprawdź podany link i oceń realną dostępność. Odpowiedz ZAWSZE w formacie JSON, zawierającym klucze: 'is_active' (boolean), 'verdict' (string, np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'), 'market_context' (string, BARDZO zwięzłe uzasadnienie werdyktu, MAX 2 zdania. Bądź ekstremalnie zwięzły.), oraz 'reason_code' (string, np. 'ACTIVE_HIT', 'ACTIVE_OK', 'EXPIRED')."
+    user_prompt = f"Tytuł oferty: {title}\nOpis: {description or 'Brak opisu.'}"
+
+    payload = {
+        "model": "sonar",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "is_active": {"type": "boolean", "description": "Status aktywności oferty."},
+                        "verdict": {"type": "string", "description": "Werdykt np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'."},
+                        "market_context": {"type": "string", "description": "Analiza rynkowa/uzasadnienie."},
+                        "reason_code": {"type": "string", "description": "Kod błędu lub statusu, np. 'ACTIVE_OK', 'EXPIRED', 'API_ERROR'."},
+                    },
+                    "required": ["is_active", "verdict", "market_context", "reason_code"]
+                }
+            }
+        }
+    }
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "authorization": f"Bearer {PERPLEXITY_API_KEY}"
+    }
 
     try:
-        client = AsyncPerplexity(api_key=PERPLEXITY_API_KEY)
-        
-        system_prompt = "Jesteś analitykiem rynku turystycznego. Twoim zadaniem jest błyskawiczna weryfikacja czy podana oferta jest wciąż aktywna. Sprawdź podany link i oceń realną dostępność oferty. Porównaj też jej cenę z aktualnymi warunkami rynkowymi. Odpowiedz ZAWSZE w formacie JSON, zawierającym klucze: 'is_active' (boolean), 'verdict' (string, np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'), 'market_context' (string, krótka analiza), oraz 'reason_code' (string, np. 'ACTIVE_OK', 'EXPIRED', 'API_ERROR')."
-        user_prompt = f"Tytuł oferty: {title}\nOpis: {description or 'Brak opisu.'}"
+        async with make_async_client() as client:
+            response = await client.post("https://api.perplexity.ai/chat/completions", json=payload, headers=headers, timeout=120.0)
+            response.raise_for_status()
+            
+            response_json = response.json()
+            raw_content = response_json['choices'][0]['message']['content']
+            
+            audit_result = json.loads(raw_content)
+            
+            log.info(f"Perplexity audit for '{title[:30]}...' successful. Active: {audit_result.get('is_active')}")
+            return audit_result
 
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "is_active": {"type": "boolean", "description": "Status aktywności oferty."},
-                "verdict": {"type": "string", "description": "Werdykt np. 'SUPER OKAZJA', 'CENA RYNKOWA', 'WYGASŁA'."},
-                "market_context": {"type": "string", "description": "Analiza rynkowa/uzasadnienie."},
-                "reason_code": {"type": "string", "description": "Kod błędu lub statusu, np. 'ACTIVE_OK', 'EXPIRED', 'API_ERROR'."},
-            },
-            "required": ["is_active", "verdict", "market_context", "reason_code"]
-        }
-
-        response = await client.chat.completions.create(
-            model="mistral-7b-instruct",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_schema", "json_schema": {"schema": json_schema}},
-        )
-        
-        # The SDK with json_schema should return a parsed JSON object directly.
-        audit_result = json.loads(response.choices[0].message.content)
-
-        log.info(f"Perplexity audit for '{title[:30]}...' successful. Active: {audit_result.get('is_active')}")
-        return audit_result
-
+    except httpx.HTTPStatusError as e:
+        log.error(f"Perplexity API returned status {e.response.status_code}: {e.response.text}", exc_info=True)
+        return {'is_active': False, 'verdict': 'ERROR', 'market_context': f'API call failed: {e.response.text}', 'reason_code': 'HTTP_STATUS_ERROR'}
     except Exception as e:
         log.error(f"Perplexity API audit failed for '{title[:30]}...'. Error: {e}", exc_info=True)
-        return {'is_active': False, 'verdict': 'ERROR', 'market_context': f'API call failed: {e}', 'reason_code': 'SDK_EXCEPTION'}
+        return {'is_active': False, 'verdict': 'ERROR', 'market_context': f'API call failed: {e}', 'reason_code': 'CLIENT_EXCEPTION'}
 
 async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not gemini_model:
@@ -370,7 +391,8 @@ async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]
         return []
 
     system_prompt = f"""
-Jesteś Globalnym Ekspertem Rynku Lotniczego i Turystycznego. Twoim zadaniem jest analiza listy ofert RSS i zwrócenie listy wyników w formacie JSON.
+Jesteś Globalnym Ekspertem Rynku Lotniczego i Turystycznego. WSZYSTKIE ODPOWIEDZI TEKSTOWE MUSZĄ BYĆ W JĘZYKU POLSKIM. Twoim zadaniem jest analiza listy ofert RSS i zwrócenie listy wyników w formacie JSON.
+Twoim celem jest kategoryzacja i ocena treści, a nie ich całkowite odrzucanie, chyba że jest to spam.
 
 Przetwórz KAŻDĄ ofertę z poniższej listy. Dla każdej oferty wykonaj następujące kroki:
 
@@ -381,20 +403,31 @@ KROK 1: KONTEKST ŹRÓDŁA (Dostosuj perspektywę):
     • Dla wszystkich innych źródeł: Ocena globalna.
 
 KROK 2: OCENA (1-10):
-    • 9-10: Mega Hit, Error Fare, Biznes w cenie Economy, Ważny News (strajki, wizy, zmiany w przepisach).
-    • 7-8: Dobra, solidna oferta.
-    • 6: Wystarczająco dobra, żeby wrzucić na czat.
-    • 1-5: Przeciętna cena, reklama, spam. (ODRZUĆ, is_good: false).
+    • 9-10: Mega Hit, Error Fare, Biznes w cenie Economy, **Ważny News** (strajki, wizy, zmiany w przepisach).
+    • 7-8: Dobra, solidna oferta cenowa.
+    • 6: Wystarczająco dobra oferta LUB **interesujący news/relacja turystyczna**, żeby wrzucić na czat.
+    • 1-5: Przeciętna cena, reklama, spam, nieistotne informacje. (ODRZUĆ, is_good: false).
 
-    KROK 3: GENEROWANIE TREŚCI (Dwa Warianty):
-    • 'channel_msg': Styl dziennikarski, informacyjny, konkretne daty, ceny, miejsca docelowe, emoji. Max 200 znaków.
-    • 'chat_msg': Styl luźny, "vibe coding", pytanie angażujące społeczność (np. "Kto leci?", "Kto się skusi?"), emoji. Max 150 znaków.
-    
-    **WAŻNE DLA OFERT SPOZA EUROPY:**
-    Jeśli oferta dotyczy regionu spoza Europy (np. Ameryki Północnej, Azji, Afryki, Australii, Ameryki Południowej), nawiąż do tego w wiadomości 'chat_msg' (a czasem też w 'channel_msg'). Dostosuj treść, aby była bardziej relewantna dla potencjalnych odbiorców w tamtym regionie, np. "Dla podróżujących z USA...", "Ktoś w Azji szuka okazji?". Bądź kreatywny.
+KROK 3: KLASYFIKACJA TREŚCI:
+    • Ustaw `"content_type"`: "offer" dla konkretnych ofert cenowych.
+    • Ustaw `"content_type"`: "news" dla wiadomości, relacji turystycznych, ogłoszeń (np. o strajkach, nowych trasach).
 
-    W obu wiadomościach (channel_msg i chat_msg) unikaj umieszczania linku do oferty. Link zostanie dodany automatycznie przez bota.
-KROK 4: SELEKCJA NA CZAT:
+KROK 4: GENEROWANIE TREŚCI:
+    • `channel_msg`: Krótki, dziennikarski styl, max 200 znaków. Idealny jako tytuł do podsumowania.
+    • `chat_msg`: Wiadomość w formacie Markdown, ściśle według poniższego szablonu. Bądź kreatywny przy tworzeniu opisu.
+
+      Format `chat_msg` (Markdown):
+      `[EMOJI_FLAGI] *[KIERUNEK]* (✈️ z: [MIASTO_WYLOTU])`
+      `📅 Termin: [DATA_LUB_MIESIĄC]`
+      `💰 Cena: *[CENA]*`
+      ``
+      `📝 [TWOJE_DWA_KREATYWNE_I_ZACHĘCAJĄCE_ZDANIA_OPISU - max 200 znaków]`
+      `───────────────`
+
+      Przykład `chat_msg`:
+      "🇪🇸 *Majorka* (✈️ z: Berlina)\\n📅 Termin: 12-19 Maja\\n💰 Cena: *850 PLN*\\n\\n📝 Spędź tydzień na słonecznej Majorce w świetnej cenie przed szczytem sezonu. Wylot z Berlina gwarantuje niższe koszty i dogodne godziny lotów.\\n───────────────"
+
+KROK 5: SELEKCJA NA CZAT:
     • Ustaw 'post_to_chat': true TYLKO dla ocen 9-10 (Hity) lub Ważnych Newsów (np. o strajkach, zmianach wizowych). Nie chcemy spamu na czacie.
 
 Twoja odpowiedź MUSI być pojedynczym obiektem JSON, zawierającym klucz "results", który jest listą obiektów. Każdy obiekt w liście musi odpowiadać jednej ofercie z wejścia i zawierać jej oryginalne "id".
@@ -402,8 +435,8 @@ Twoja odpowiedź MUSI być pojedynczym obiektem JSON, zawierającym klucz "resul
 Format odpowiedzi:
 {{
   "results": [
-    {{ "id": 0, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str }},
-    {{ "id": 1, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str }}
+    {{ "id": 0, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str, "content_type": "offer" | "news" }},
+    {{ "id": 1, "score": int, "is_good": bool, "post_to_chat": bool, "channel_msg": str, "chat_msg": str, "content_type": "offer" | "news" }}
   ]
 }}
 """
@@ -517,20 +550,61 @@ async def send_social_telegram_message_async(message_content: str, chat_id: str,
             log.error(f"Telegram send error for social message to {chat_id}: {e}")
     return None
 
-async def send_telegram_message_async(message_content: str, link: str, host: str, chat_id: str, reply_markup: Dict[str, Any] | None = None) -> int | None:
+async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: str, button_text: str, button_url: str) -> int | None:
+    """Wysyła zdjęcie z podpisem i przyciskiem Inline do Telegrama."""
     async with make_async_client() as client:
         try:
-            safe_text = html.escape(message_content, quote=False)
-
-            text = f"{safe_text}\n\n<a href='{link}'>👉 Zobacz ofertę</a>"
             payload = {
                 "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False
+                "photo": photo_url,
+                "caption": caption,
+                "parse_mode": "HTML", # Caption can be HTML
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": button_text, "url": button_url}
+                    ]]
+                }
             }
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+            
+            r = await client.post(url, json=payload, timeout=HTTP_TIMEOUT)
+            r.raise_for_status()
+            body = r.json()
+
+            if body.get("ok"):
+                log.info(f"Photo sent to {chat_id}: {photo_url}")
+                return body.get("result", {}).get("message_id")
+            else:
+                log.error(f"Telegram returned ok=false for sendPhoto: {body}")
+        except Exception as e:
+            log.error(f"Telegram sendPhoto error to {chat_id} (URL: {photo_url}): {e}", exc_info=True)
+    return None
+
+async def send_telegram_message_async(message_content: str, link: str, chat_id: str) -> int | None:
+    """Wysyła wiadomość sformatowaną w MarkdownV2 z przyciskiem Inline."""
+    async with make_async_client() as client:
+        try:
+            # Gemini dostarcza treść już w formacie Markdown, gotową do wysłania.
+            # Należy uważać na znaki specjalne, które MarkdownV2 wymaga escape'owania.
+            # Prompt dla Gemini musi być tak skonstruowany, aby generował poprawny Markdown.
+            # Telegram wymaga escape'owania: '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'
+            
+            # Prosta funkcja do escape'owania, jeśli Gemini by sobie nie radził.
+            def escape_markdown(text: str) -> str:
+                escape_chars = r'_*[]()~`>#+-=|{}.!'
+                return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
+
+            payload = {
+                "chat_id": chat_id,
+                "text": message_content,
+                "parse_mode": "MarkdownV2",
+                "disable_web_page_preview": True,
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": "👉 SPRAWDŹ OFERTĘ", "url": link}
+                    ]]
+                }
+            }
             
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
             
@@ -539,12 +613,16 @@ async def send_telegram_message_async(message_content: str, link: str, host: str
             body = r.json()
 
             if body.get("ok"):
-                log.info(f"Message sent: {message_content[:60]}…")
+                log.info(f"Message sent (Markdown): {message_content[:60]}…")
                 return body.get("result", {}).get("message_id")
             else:
                 log.error(f"Telegram returned ok=false: {body}")
+                # Jeśli błąd dotyczy parsowania, zaloguj treść, która spowodowała problem
+                if body.get("description") and "can't parse entities" in body["description"]:
+                    log.warning(f"MARKDOWN PARSE ERROR. Offending text was: \n---\n{message_content}\n---")
+
         except Exception as e:
-            log.error(f"Telegram send error for {link}: {e}")
+            log.error(f"Telegram send error for {link}: {e}", exc_info=True)
     return None
 
 # ---------- ORYGINALNE FUNKCJE (Bez zmian) ----------
@@ -697,25 +775,6 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
         log.warning("Skipping social posts: TELEGRAM_CHANNEL_ID, TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
         return
 
-    # Check for quiet hours (23:00 to 09:00 UTC)
-    now_utc = datetime.now(timezone.utc)
-    if 23 <= now_utc.hour or now_utc.hour < 9:
-        log.info("Skipping social posts during quiet hours (23:00-09:00 UTC).")
-        return
-
-    # Check if enough time has passed (2 hours)
-    last_post_time_str = state.get("last_social_post_time", "1970-01-01T00:00:00Z")
-    try:
-        last_post_time = datetime.fromisoformat(last_post_time_str)
-    except ValueError:
-        log.warning(f"Malformed last_social_post_time in state: {last_post_time_str}. Resetting.")
-        last_post_time = datetime.fromisoformat("1970-01-01T00:00:00Z") # Reset to trigger new post
-
-    time_since_last_post = now_utc - last_post_time
-    if time_since_last_post < timedelta(hours=2):
-        log.info(f"Not yet time for a social post. Last post: {last_post_time_str}. Time since: {time_since_last_post}")
-        return
-
     log.info("Initiating social engagement post sequence.")
     
     # --- Post na Kanał (zachęta do dyskusji na czacie) ---
@@ -731,7 +790,7 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
         await send_social_telegram_message_async(
             message_content=channel_msg,
             chat_id=TELEGRAM_CHANNEL_ID,
-            button_text="💬 Wejdź na czat / Komentarze",
+            button_text="💬 Wejdź na czat",
             button_url=CHAT_CHANNEL_URL or "https://t.me/+iKncwXtipa02MWNk" # Fallback link
         )
         await asyncio.sleep(random.uniform(0.5, 1.5))
@@ -755,6 +814,7 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
         await asyncio.sleep(random.uniform(0.5, 1.5))
 
     # Update last_social_post_time and save state
+    now_utc = datetime.now(timezone.utc)
     state["last_social_post_time"] = now_utc.isoformat()
     try:
         # We need to reload state/generation to ensure atomic update after previous saves if any
@@ -768,6 +828,141 @@ async def handle_social_posts(state: Dict[str, Any], current_generation: int):
         log.error(f"Failed to save state after social post: {e}")
 
 # ---------- GŁÓWNA LOGIKA (Używamy ostatniej, prostej wersji) ----------
+async def publish_digest_async() -> str:
+    log.info("Starting weekly digest generation...")
+    state, generation = load_state()
+
+    if not TELEGRAPH_TOKEN:
+        log.error("TELEGRAPH_TOKEN is not configured. Cannot publish digest.")
+        return "Error: Telegraph token not configured."
+
+    # 1. Read the digest candidates
+    digest_candidates = state.get("digest_candidates", [])
+    if not digest_candidates:
+        log.info("Digest candidates list is empty. Skipping digest generation.")
+        return "Digest candidates list is empty, no digest to generate."
+
+    # 2. Deduplicate offers based on dedup_key, keeping the one with the highest score
+    unique_offers_dict = {}
+    for offer in digest_candidates:
+        dedup_key = offer.get('dedup_key')
+        if not dedup_key: continue
+        
+        score = int(offer.get('score', 0))
+        if dedup_key not in unique_offers_dict or score > int(unique_offers_dict[dedup_key].get('score', 0)):
+            unique_offers_dict[dedup_key] = offer
+    
+    unique_offers = list(unique_offers_dict.values())
+    log.info(f"Found {len(digest_candidates)} offers in candidates list, {len(unique_offers)} after deduplication.")
+
+    # 3. Select Top 25 offers by score
+    sorted_by_score = sorted(unique_offers, key=lambda o: int(o.get('score', 0)), reverse=True)
+    top_25_offers = sorted_by_score[:25]
+
+    # 4. Sort these 25 offers alphabetically by title for better presentation
+    sorted_alphabetically = sorted(top_25_offers, key=lambda o: o.get('title', ''))
+    log.info(f"Selected {len(sorted_alphabetically)} offers for the digest.")
+
+    # 5. Generate the Telegra.ph page content
+    telegraph = Telegraph(TELEGRAPH_TOKEN)
+    
+    content_html = ""
+    for offer in sorted_alphabetically:
+        title_for_digest = offer.get('ai_generated_title', offer.get('original_title', 'Brak tytułu'))
+        verdict = offer.get('verdict', 'Nieokreślony werdykt')
+        market_context = offer.get('market_context', 'Brak szczegółów analizy rynkowej.')
+        link = offer.get('link')
+        
+        content_html += f"<h4>{html.escape(title_for_digest)}</h4>"
+        content_html += f"<p><b>Werdykt:</b> {html.escape(str(verdict))}</p>"
+        content_html += f"<p><i>Analiza:</i> {html.escape(str(market_context))}</p>"
+        content_html += f"<p><a href='{html.escape(link)}'>👉 SPRAWDŹ OFERTĘ</a></p>"
+        content_html += "<hr/>" # Visual separator
+
+    try:
+        page_title = f"Hity Tygodnia: Podsumowanie Ofert ({datetime.now().strftime('%Y-%m-%d')})"
+        response = telegraph.create_page(
+            title=page_title,
+            html_content=content_html,
+            author_name="Travel Bot", # Changed from Newsletter Bot
+        )
+        page_url = response['url']
+        log.info(f"Successfully created Telegra.ph page: {page_url}")
+
+        # 6. Send the link to Telegram (with photo and engaging caption)
+        engaging_caption = "🔥 <b>GORĄCE HITY TYGODNIA SĄ GOTOWE!</b> 🔥\n\nOto starannie wyselekcjonowane, najlepsze okazje z ostatnich dni. Nie przegap – mogą szybko zniknąć!\n\n<i>Sprawdź, klikając w przycisk poniżej!</i>"
+        digest_button_text = "💎 Zobacz Ekskluzywne Hity! 💎"
+        
+        selected_photo_url = random.choice(DIGEST_IMAGE_URLS)
+
+        sending_tasks = []
+        if TELEGRAM_CHANNEL_ID:
+            sending_tasks.append(send_photo_with_button_async(
+                chat_id=TELEGRAM_CHANNEL_ID,
+                photo_url=selected_photo_url,
+                caption=engaging_caption,
+                button_text=digest_button_text,
+                button_url=page_url
+            ))
+        
+        if sending_tasks:
+            await asyncio.gather(*sending_tasks)
+
+        # 7. Clear the digest candidates list
+        state["digest_candidates"] = []
+        save_state_atomic(state, generation)
+        log.info("Digest candidates list has been cleared and state saved.")
+        
+        return f"Weekly Digest published successfully: {page_url}"
+
+    except Exception as e:
+        log.error(f"Failed to create or publish Telegra.ph page: {e}", exc_info=True)
+        return "Error during digest publication."
+
+async def send_promotional_post_async() -> str:
+    log.info("Starting promotional post sequence...")
+    try:
+        state, generation = load_state()
+        await handle_social_posts(state, generation)
+        log.info("Promotional post sequence completed.")
+        return "Promotional post sequence completed."
+    except Exception as e:
+        log.error(f"Error during promotional post sequence: {e}", exc_info=True)
+        return f"Error during promotional post sequence: {e}"
+
+
+async def master_scheduler():
+    now_utc = datetime.now(timezone.utc)
+    log.info(f"Master scheduler running at {now_utc.isoformat()}")
+
+    # 1. ZAWSZE URUCHOM INGESTIĘ
+    log.info("Scheduler: Kicking off ingestion process.")
+    await process_sources_async()
+
+    # --- LOGIKA PUBLIKACJI I HARMONOGRAM ---
+    
+    digest_sent = False
+    
+    # 2. LOGIKA DIGESTU (10:00 i 20:00)
+    if now_utc.hour in [10, 20]:
+        log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, publishing digest.")
+        await publish_digest_async()
+        digest_sent = True
+    
+    # 3. LOGIKA PROMOCJI (Godziny nieparzyste ORAZ 20:00)
+    
+    # Godziny dla promocji: 9, 11, 13, 15, 17, 19, 21, 23 (nieparzyste) LUB 20 (specjalny przypadek)
+    is_promo_time = (now_utc.hour % 2 != 0 and 9 <= now_utc.hour <= 23) or now_utc.hour == 20
+
+    if is_promo_time:
+         # Jeśli to 20:00, post promocyjny zostanie wysłany PO digeście (ustalona kolejność)
+         # W pozostałych godzinach występuje jako główna akcja
+         log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, running promotional post.")
+         await send_promotional_post_async() 
+
+    log.info("Master scheduler run finished.")
+    return "Scheduler run complete."
+
 async def process_sources_async() -> str:
     log.info("Starting a simple RSS-only processing run...")
 
@@ -923,74 +1118,82 @@ async def process_sources_async() -> str:
         
         offer_score = ai_result.get("score", 0)
         offer_title = original_candidate['title']
-        
-        # --- ŚCIEŻKA 1: Czat Ogólny (oceny 6, 7, 8) ---
-        if 6 <= offer_score <= 8:
-            log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for Chat Group.")
-            chat_text = ai_result.get("chat_msg") or f"Nowa oferta: {offer_title}"
+        content_type = ai_result.get("content_type", "offer") # Default to "offer" for safety
+
+        # --- NEW LOGIC: Route based on content_type ---
+
+        # Path 1: News content - always goes to chat group
+        if content_type == "news":
+            log.info(f"Content '{offer_title[:40]}...' is 'news'. Sending to Chat Group.")
+            chat_text = ai_result.get("chat_msg") or f"📰 News: {offer_title}"
             
             chat_message_id = await send_telegram_message_async(
                 message_content=chat_text,
                 link=original_candidate['link'],
-                host=original_candidate['host'],
                 chat_id=TELEGRAM_CHAT_GROUP_ID
             )
             if chat_message_id:
                 sent_count_chat += 1
                 if DELETE_AFTER_HOURS > 0:
                     remember_for_deletion(state, TELEGRAM_CHAT_GROUP_ID, chat_message_id, original_candidate['source_url'])
-                log.info(f"Successfully sent to Chat Group and queued for deletion.")
+                log.info(f"Successfully sent 'news' item to Chat Group and queued for deletion.")
 
-        # --- ŚCIEŻKA 2: Lejek VIP (oceny 9 i 10) ---
-        elif offer_score >= 9:
-            log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for VIP Channel. Auditing with Perplexity...")
-            audit_result = await audit_offer_with_perplexity(offer_title, original_candidate.get("description"))
-
-            # --- Jeśli audyt się powiedzie -> Kanał VIP ---
-            if audit_result.get("is_active"):
-                log.info(f"Perplexity confirmed offer is active. Verdict: {audit_result.get('verdict')}. Posting to VIP Channel.")
-                market_context = audit_result.get('market_context', 'Weryfikacja pomyślna.')
-                vip_message = f"💎 {offer_title}\n\n✅ **ZWERYFIKOWANO**: {market_context}"
-                
-                # Przygotowanie przycisku CTA
-                cta_button = None
-                if CHAT_CHANNEL_URL:
-                    cta_button = {
-                        "inline_keyboard": [[
-                            {"text": "Więcej ofert high-volume znajdziesz na naszym głównym CZACIE!", "url": CHAT_CHANNEL_URL}
-                        ]]
-                    }
-
-                channel_message_id = await send_telegram_message_async(
-                    message_content=vip_message,
-                    link=original_candidate['link'],
-                    host=original_candidate['host'],
-                    chat_id=TELEGRAM_CHANNEL_ID,
-                    reply_markup=cta_button
-                )
-                
-                if channel_message_id:
-                    sent_count_channel += 1
-                    if DELETE_AFTER_HOURS > 0:
-                        remember_for_deletion(state, TELEGRAM_CHANNEL_ID, channel_message_id, original_candidate['source_url'])
-                    log.info(f"Successfully sent VIP message to Channel and queued for deletion.")
-            
-            # --- Jeśli audyt się nie powiedzie -> Czat Ogólny (degradacja) ---
-            else:
-                log.warning(f"Perplexity audit failed or offer inactive for '{offer_title[:40]}...'. Demoting to Chat Group.")
+        # Path 2: Offer content - use score-based routing
+        elif content_type == "offer":
+            # Sub-path 2a: Mid-tier offers (6-8) go to chat
+            if 6 <= offer_score <= 8:
+                log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for Chat Group.")
                 chat_text = ai_result.get("chat_msg") or f"Nowa oferta: {offer_title}"
                 
                 chat_message_id = await send_telegram_message_async(
                     message_content=chat_text,
                     link=original_candidate['link'],
-                    host=original_candidate['host'],
                     chat_id=TELEGRAM_CHAT_GROUP_ID
                 )
                 if chat_message_id:
                     sent_count_chat += 1
                     if DELETE_AFTER_HOURS > 0:
                         remember_for_deletion(state, TELEGRAM_CHAT_GROUP_ID, chat_message_id, original_candidate['source_url'])
-                    log.info(f"Successfully sent demoted VIP offer to Chat Group and queued for deletion.")
+                    log.info(f"Successfully sent mid-tier offer to Chat Group and queued for deletion.")
+
+            # Sub-path 2b: High-tier offers (9-10) go to Perplexity and then digest
+            elif offer_score >= 9:
+                log.info(f"Offer '{offer_title[:40]}...' (Score: {offer_score}) qualifies for VIP treatment. Auditing with Perplexity...")
+                audit_result = await audit_offer_with_perplexity(offer_title, original_candidate.get("description"))
+
+                if audit_result.get("is_active"):
+                    log.info(f"Perplexity confirmed offer is active. Verdict: {audit_result.get('verdict')}. Adding to digest candidates.")
+                    
+                    # Check for duplication before adding to digest_candidates
+                    existing_candidate_keys = {c.get('dedup_key') for c in state["digest_candidates"]}
+                    if original_candidate['dedup_key'] not in existing_candidate_keys:
+                                            state["digest_candidates"].append({
+                                                "original_title": offer_title, # Zachowaj oryginalny tytuł RSS dla referencji
+                                                "ai_generated_title": ai_result.get('channel_msg', offer_title), # Użyj channel_msg Gemini jako polskiego tytułu
+                                                "link": original_candidate['link'],
+                                                "score": offer_score,
+                                                "dedup_key": original_candidate['dedup_key'],
+                                                "source_name": original_candidate['source_name'],
+                                                "market_context": audit_result.get('market_context', 'Brak szczegółów analizy rynkowej.'),
+                                                "verdict": audit_result.get('verdict', 'Nieokreślony werdykt.'),
+                                            })
+                                            log.info(f"Offer '{offer_title[:40]}...' added to digest candidates.")
+                    else:
+                        log.info(f"Offer '{offer_title[:40]}...' already exists in digest candidates (deduplicated).")
+                else:
+                    log.warning(f"Perplexity audit failed or offer inactive for '{offer_title[:40]}...'. Demoting to Chat Group.")
+                    chat_text = ai_result.get("chat_msg") or f"Nowa oferta: {offer_title}"
+                    
+                    chat_message_id = await send_telegram_message_async(
+                        message_content=chat_text,
+                        link=original_candidate['link'],
+                        chat_id=TELEGRAM_CHAT_GROUP_ID
+                    )
+                    if chat_message_id:
+                        sent_count_chat += 1
+                        if DELETE_AFTER_HOURS > 0:
+                            remember_for_deletion(state, TELEGRAM_CHAT_GROUP_ID, chat_message_id, original_candidate['source_url'])
+                        log.info(f"Successfully sent demoted VIP offer to Chat Group and queued for deletion.")
 
         # Add a small, random delay between each candidate to avoid hitting Telegram's own limits
         await asyncio.sleep(random.uniform(0.2, 0.5))
@@ -1005,27 +1208,22 @@ async def process_sources_async() -> str:
             log.critical(f"FINAL STATE SAVE FAILED: {e}")
             return "Critical: State save failed."
             
-    # After all offer processing, run social engagement posts
-    try:
-        await handle_social_posts(state, generation)
-    except Exception as e:
-        log.error(f"Error in final social posts handler: {e}")
-            
     return f"Run complete. Found {len(all_posts)} posts, sent {sent_count_channel} to channel and {sent_count_chat} to chat group."
 
 
-# ---------- FLASK ROUTES (Bez zmian) ----------
+# ---------- FLASK ROUTES ----------
 @app.route("/")
 def index():
     return "Travel-Bot v6.0 Refactored is running.", 200
 
 @app.route("/run", methods=['POST'])
-def run_now():
+def run_main_scheduler():
+    """Main endpoint to be triggered by an hourly cron job."""
     try:
-        result = asyncio.run(process_sources_async())
+        result = asyncio.run(master_scheduler())
         return jsonify({"status": "ok", "result": result}), 200
     except Exception as e:
-        log.exception("Error in /run endpoint")
+        log.exception("Error in /run (master_scheduler) endpoint")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/sweep", methods=['POST'])
@@ -1034,11 +1232,9 @@ def handle_sweep():
     if not TELEGRAM_SECRET or auth_header != TELEGRAM_SECRET:
         return "Unauthorized", 401
     
-    # FIX: Wczytaj stan przed wywołaniem sweep i zapisz go po
     state, generation = load_state()
     deleted_count = asyncio.run(sweep_delete_queue(state))
     try:
-        # Zapis atomowy jest ważny, jeśli sweep zmodyfikował stan
         save_state_atomic(state, generation) 
         log.info("Stan zapisany po ręcznym zadaniu sweep.")
     except Exception as e:

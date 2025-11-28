@@ -61,7 +61,7 @@ The bot runs as a containerized web service with a Flask-based endpoint for trig
 
 - **Language:** Python 3.13
 - **Asynchronous/HTTP:** asyncio, httpx[http2]
-- **Data Processing:** feedparser, orjson (for fast JSON), beautifulsoup4 (for scraping)
+- **Data Processing:** feedparser, beautifulsoup4 (for scraping)
 - **Cloud/State:** google-cloud-storage (for atomic state persistence)
 - **Deployment:** Docker, Gunicorn, Flask
 
@@ -143,7 +143,7 @@ Bot działa jako skonteneryzowana usługa webowa z endpointem opartym na Flasku 
 
 - **Język:** Python 3.13
 - **Asynchroniczność/HTTP:** asyncio, httpx[http2]
-- **Przetwarzanie Danych:** feedparser, orjson (do szybkiego JSON), beautifulsoup4 (do scrapowania)
+- **Przetwarzanie Danych:** feedparser, beautifulsoup4 (do scrapowania)
 - **Chmura/Stan:** google-cloud-storage (do atomowej persystencji stanu)
 - **Wdrożenie:** Docker, Gunicorn, Flask
 

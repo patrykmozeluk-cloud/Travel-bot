@@ -1,24 +1,29 @@
-# OSTATECZNA WERSJA - 1 PAŹ 2025 v5 (dla pliku main.py)
-# 1. Użyj oficjalnego, lekkiego i STABILNEGO obrazu Pythona
+# OSTATECZNA WERSJA - POPRAWIONA
 FROM python:3.11-slim
 
-# 2. Ustaw zmienną środowiskową, aby logy pojawiały się od razu
+# 1. Ustawienia środowiska
 ENV PYTHONUNBUFFERED True
+ENV PORT 8080
 
-# 3. Ustaw folder roboczy wewnątrz kontenera
+# 2. Folder roboczy
 WORKDIR /app
 
-# 4. Skopiuj plik z bibliotekami
+# 3. Instalacja pakietów systemowych (tylko niezbędne minimum)
+# build-essential może być potrzebny do niektórych bibliotek pythonowych,
+# ale usuwamy Rusta, chyba że instalacja pip wyrzuci błąd.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 4. Kopiowanie requirements i instalacja zależności
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Zainstaluj pakiety systemowe potrzebne do kompilacji niektórych bibliotek Pythona
-RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
-
-# 5. Zainstaluj biblioteki Pythona (z aktualizacją pip)
-RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-
-# 6. Skopiuj resztę plików aplikacji (w tym main.py)
+# 5. Kopiowanie reszty plików aplikacji
+# WAŻNE: Upewnij się, że plik rss_sources.txt jest w tym samym folderze co Dockerfile!
 COPY . .
 
-# 7. Ustaw komendę startową wskazującą na plik main.py
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "300", "main:app"]
+# 6. Uruchomienie aplikacji przez Gunicorn
+# main:app oznacza: plik main.py, obiekt app = Flask(__name__)
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "900", "main:app"]
