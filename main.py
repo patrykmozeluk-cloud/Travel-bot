@@ -125,12 +125,11 @@ def canonicalize_url(url: str) -> str:
         return url.strip()
 
 def _default_state() -> Dict[str, Any]:
-    return {"sent_links": {}, "delete_queue": [], "last_social_post_time": "1970-01-01T00:00:00Z", "last_ai_analysis_time": "1970-01-01T00:00:00Z", "digest_candidates": []}
+    return {"sent_links": {}, "delete_queue": [], "last_ai_analysis_time": "1970-01-01T00:00:00Z", "digest_candidates": []}
 
 def _ensure_state_shapes(state: Dict[str, Any]):
     if "sent_links" not in state: state["sent_links"] = {}
     if "delete_queue" not in state: state["delete_queue"] = []
-    if "last_social_post_time" not in state: state["last_social_post_time"] = "1970-01-01T00:00:00Z"
     if "last_ai_analysis_time" not in state: state["last_ai_analysis_time"] = "1970-01-01T00:00:00Z"
     if "digest_candidates" not in state: state["digest_candidates"] = []
 
@@ -551,10 +550,10 @@ Przykład: {\"post\": \"Treść Twojego kreatywnego posta tutaj.\"}
 
 # ---------- PRZEBUDOWANA LOGIKA WYSYŁANIA ----------
 
-async def send_social_telegram_message_async(message_content: str, chat_id: str, button_text: str, button_url: str) -> int | None:
+async def send_social_telegram_message_async(message_content: str, chat_id: str, button_text: str, button_url: str, reply_to_message_id: int | None = None) -> int | None:
     async with make_async_client() as client:
         try:
-            payload = {
+            payload: Dict[str, Any] = {
                 "chat_id": chat_id,
                 "text": message_content,
                 "parse_mode": "HTML",
@@ -563,6 +562,9 @@ async def send_social_telegram_message_async(message_content: str, chat_id: str,
                     "inline_keyboard": [[{"text": button_text, "url": button_url}]]
                 }
             }
+            if reply_to_message_id:
+                payload["reply_to_message_id"] = reply_to_message_id
+
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
             
             r = await client.post(url, json=payload, timeout=HTTP_TIMEOUT)
@@ -774,57 +776,6 @@ async def scrape_webpage(client: httpx.AsyncClient, url: str) -> List[Tuple[str,
     except Exception as e: dbg(f"Scrape failed for {url}: {e}")
     return []
 
-async def handle_social_posts(state: Dict[str, Any], current_generation: int):
-    if not TELEGRAM_CHANNEL_ID or not TELEGRAM_CHAT_GROUP_ID or not TELEGRAM_CHANNEL_USERNAME:
-        log.warning("Skipping social posts: TELEGRAM_CHANNEL_ID, TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
-        return
-
-    log.info("Initiating social engagement post sequence.")
-    
-    channel_msg_raw = await generate_social_message_ai("channel")
-    if channel_msg_raw:
-        try:
-            channel_data = json.loads(channel_msg_raw)
-            channel_msg = channel_data.get("post", channel_msg_raw)
-        except json.JSONDecodeError:
-            channel_msg = channel_msg_raw
-
-        log.info("Sending social channel message with inline button.")
-        await send_social_telegram_message_async(
-            message_content=channel_msg,
-            chat_id=TELEGRAM_CHANNEL_ID,
-            button_text="💬 Wejdź na czat",
-            button_url="https://t.me/agregator_inspiracji_chat"
-        )
-        await asyncio.sleep(random.uniform(0.5, 1.5))
-
-    chat_group_msg_raw = await generate_social_message_ai("chat_group")
-    if chat_group_msg_raw:
-        try:
-            chat_group_data = json.loads(chat_group_msg_raw)
-            chat_group_msg = chat_group_data.get("post", chat_group_msg_raw)
-        except json.JSONDecodeError:
-            chat_group_msg = chat_group_msg_raw
-
-        log.info("Sending social chat group message with inline button.")
-        await send_social_telegram_message_async(
-            message_content=chat_group_msg,
-            chat_id=TELEGRAM_CHAT_GROUP_ID,
-            button_text="👉 Sprawdź Kanał VIP",
-            button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
-        )
-        await asyncio.sleep(random.uniform(0.5, 1.5))
-
-    now_utc = datetime.now(timezone.utc)
-    state["last_social_post_time"] = now_utc.isoformat()
-    try:
-        current_state, current_generation = load_state()
-        current_state["last_social_post_time"] = state["last_social_post_time"]
-        save_state_atomic(current_state, current_generation)
-        log.info(f"Updated last_social_post_time to {state['last_social_post_time']}.")
-    except Exception as e:
-        log.error(f"Failed to save state after social post: {e}")
-
 # ---------- GŁÓWNA LOGIKA (Używamy ostatniej, prostej wersji) ----------
 async def publish_digest_async() -> str:
     log.info("Starting weekly digest generation...")
@@ -900,7 +851,27 @@ async def publish_digest_async() -> str:
             ))
         
         if sending_tasks:
-            await asyncio.gather(*sending_tasks)
+            results = await asyncio.gather(*sending_tasks)
+            if results and results[0]:
+                digest_message_id = results[0]
+                log.info(f"Digest sent to channel, got message_id: {digest_message_id}. Now posting social comment as reply.")
+                
+                # Generate and post social comment as a reply
+                social_comment_raw = await generate_social_message_ai("channel")
+                if social_comment_raw:
+                    try:
+                        social_data = json.loads(social_comment_raw)
+                        social_comment_text = social_data.get("post", "Co sądzicie o tych ofertach? Dajcie znać na czacie!")
+                    except json.JSONDecodeError:
+                        social_comment_text = social_comment_raw # Fallback to raw text
+                    
+                    await send_social_telegram_message_async(
+                        chat_id=TELEGRAM_CHANNEL_ID,
+                        message_content=social_comment_text,
+                        button_text="💬 Wejdź na czat",
+                        button_url=CHAT_CHANNEL_URL,
+                        reply_to_message_id=digest_message_id
+                    )
 
         state["digest_candidates"] = []
         save_state_atomic(state, generation)
@@ -938,11 +909,47 @@ async def master_scheduler():
         await publish_digest_async()
         digest_sent = True
     
-    is_promo_time = (now_utc.hour % 2 != 0 and 9 <= now_utc.hour <= 23) or now_utc.hour == 20
+    if now_utc.hour == 13:
+        log.info("Scheduler: It's 13:00 UTC, running standalone social post on channel.")
+        if TELEGRAM_CHANNEL_ID and CHAT_CHANNEL_URL:
+            channel_msg_raw = await generate_social_message_ai("channel")
+            if channel_msg_raw:
+                try:
+                    channel_data = json.loads(channel_msg_raw)
+                    channel_msg = channel_data.get("post", channel_msg_raw)
+                except json.JSONDecodeError:
+                    channel_msg = channel_msg_raw
+                
+                await send_social_telegram_message_async(
+                    chat_id=TELEGRAM_CHANNEL_ID,
+                    message_content=channel_msg,
+                    button_text="💬 Wejdź na czat",
+                    button_url=CHAT_CHANNEL_URL
+                )
+        else:
+            log.warning("Skipping 13:00 channel promo post: TELEGRAM_CHANNEL_ID or CHAT_CHANNEL_URL not set.")
+
+    is_promo_time = (now_utc.hour % 2 != 0 and 9 <= now_utc.hour <= 23)
 
     if is_promo_time:
-         log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, running promotional post.")
-         await send_promotional_post_async()
+        log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, running promotional post for the chat group.")
+        if TELEGRAM_CHAT_GROUP_ID and TELEGRAM_CHANNEL_USERNAME:
+            chat_group_msg_raw = await generate_social_message_ai("chat_group")
+            if chat_group_msg_raw:
+                try:
+                    chat_group_data = json.loads(chat_group_msg_raw)
+                    chat_group_msg = chat_group_data.get("post", chat_group_msg_raw)
+                except json.JSONDecodeError:
+                    chat_group_msg = chat_group_msg_raw
+
+                await send_social_telegram_message_async(
+                    message_content=chat_group_msg,
+                    chat_id=TELEGRAM_CHAT_GROUP_ID,
+                    button_text="👉 Sprawdź Kanał VIP",
+                    button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
+                )
+        else:
+            log.warning("Skipping chat group promo post: TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
 
     log.info("Master scheduler run finished.")
     return "Scheduler run complete."
