@@ -905,55 +905,36 @@ async def master_scheduler():
     log.info("Scheduler: Kicking off ingestion process.")
     await process_sources_async()
     
-    digest_sent = False
+    # --- Mutually Exclusive Social/Digest Logic ---
     
+    # Priority 1: Digest publishing. If it's a digest hour, do ONLY this.
     if now_utc.hour in [10, 20]:
-        log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, publishing digest.")
+        log.info(f"Scheduler: It's a digest hour ({now_utc.hour}:00 UTC). Publishing digest. No other social posts will be sent.")
         await publish_digest_async()
-        digest_sent = True
     
-    if now_utc.hour == 13:
-        log.info("Scheduler: It's 13:00 UTC, running standalone social post on channel.")
-        if TELEGRAM_CHANNEL_ID and CHAT_CHANNEL_URL:
-            channel_msg_raw = await generate_social_message_ai("channel")
-            if channel_msg_raw:
-                try:
-                    channel_data = json.loads(channel_msg_raw)
-                    channel_msg = channel_data.get("post", channel_msg_raw)
-                except json.JSONDecodeError:
-                    channel_msg = channel_msg_raw
-                
-                await send_social_telegram_message_async(
-                    chat_id=TELEGRAM_CHANNEL_ID,
-                    message_content=channel_msg,
-                    button_text="💬 Wejdź na czat",
-                    button_url=CHAT_CHANNEL_URL
-                )
-        else:
-            log.warning("Skipping 13:00 channel promo post: TELEGRAM_CHANNEL_ID or CHAT_CHANNEL_URL not set.")
+    # Priority 2: If not a digest hour, then consider sending the hourly promotional post to the chat group.
+    else:
+        is_promo_time = (now_utc.hour % 2 != 0 and 9 <= now_utc.hour <= 23)
+        if is_promo_time:
+            log.info(f"Scheduler: It's a promo hour ({now_utc.hour}:00 UTC), running promotional post for the chat group.")
+            if TELEGRAM_CHAT_GROUP_ID and TELEGRAM_CHANNEL_USERNAME:
+                chat_group_msg_raw = await generate_social_message_ai("chat_group")
+                if chat_group_msg_raw:
+                    try:
+                        chat_group_data = json.loads(chat_group_msg_raw)
+                        chat_group_msg = chat_group_data.get("post", chat_group_msg_raw)
+                    except json.JSONDecodeError:
+                        chat_group_msg = chat_group_msg_raw
 
-    is_promo_time = (now_utc.hour % 2 != 0 and 9 <= now_utc.hour <= 23)
-
-    if is_promo_time:
-        log.info(f"Scheduler: It's {now_utc.hour}:00 UTC, running promotional post for the chat group.")
-        if TELEGRAM_CHAT_GROUP_ID and TELEGRAM_CHANNEL_USERNAME:
-            chat_group_msg_raw = await generate_social_message_ai("chat_group")
-            if chat_group_msg_raw:
-                try:
-                    chat_group_data = json.loads(chat_group_msg_raw)
-                    chat_group_msg = chat_group_data.get("post", chat_group_msg_raw)
-                except json.JSONDecodeError:
-                    chat_group_msg = chat_group_msg_raw
-
-                vip_channel_url = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
-                await send_social_telegram_message_async(
-                    message_content=chat_group_msg,
-                    chat_id=TELEGRAM_CHAT_GROUP_ID,
-                    button_text="👉 Sprawdź Kanał VIP",
-                    button_url=vip_channel_url
-                )
-        else:
-            log.warning("Skipping chat group promo post: TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
+                    vip_channel_url = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
+                    await send_social_telegram_message_async(
+                        message_content=chat_group_msg,
+                        chat_id=TELEGRAM_CHAT_GROUP_ID,
+                        button_text="👉 Sprawdź Kanał VIP",
+                        button_url=vip_channel_url
+                    )
+            else:
+                log.warning("Skipping chat group promo post: TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
 
     log.info("Master scheduler run finished.")
     return "Scheduler run complete."
