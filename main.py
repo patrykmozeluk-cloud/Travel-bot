@@ -842,13 +842,16 @@ async def publish_digest_async() -> str:
 
         sending_tasks = []
         if TELEGRAM_CHANNEL_ID:
-            sending_tasks.append(send_photo_with_button_async(
-                chat_id=TELEGRAM_CHANNEL_ID,
-                photo_url=selected_photo_url,
-                caption=engaging_caption,
-                button_text=digest_button_text,
-                button_url=page_url
-            ))
+            if str(TELEGRAM_CHAT_GROUP_ID) == str(TELEGRAM_CHANNEL_ID):
+                 log.warning("Digest not sent to channel because TELEGRAM_CHANNEL_ID is the same as TELEGRAM_CHAT_GROUP_ID. This indicates a configuration error.")
+            else:
+                sending_tasks.append(send_photo_with_button_async(
+                    chat_id=TELEGRAM_CHANNEL_ID,
+                    photo_url=selected_photo_url,
+                    caption=engaging_caption,
+                    button_text=digest_button_text,
+                    button_url=page_url
+                ))
         
         if sending_tasks:
             results = await asyncio.gather(*sending_tasks)
@@ -942,11 +945,12 @@ async def master_scheduler():
                 except json.JSONDecodeError:
                     chat_group_msg = chat_group_msg_raw
 
+                vip_channel_url = f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
                 await send_social_telegram_message_async(
                     message_content=chat_group_msg,
                     chat_id=TELEGRAM_CHAT_GROUP_ID,
                     button_text="👉 Sprawdź Kanał VIP",
-                    button_url=f"https://t.me/{TELEGRAM_CHANNEL_USERNAME.lstrip('@')}"
+                    button_url=vip_channel_url
                 )
         else:
             log.warning("Skipping chat group promo post: TELEGRAM_CHAT_GROUP_ID or TELEGRAM_CHANNEL_USERNAME not set.")
