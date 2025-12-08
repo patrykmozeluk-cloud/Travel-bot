@@ -1,9 +1,10 @@
 # OSTATECZNA WERSJA - POPRAWIONA
-FROM python:3.11-slim
+FROM python:3.11
 
 # 1. Ustawienia środowiska
 ENV PYTHONUNBUFFERED True
 ENV PORT 8080
+ENV PYTHONASYNCIODEBUG 1
 
 # 2. Folder roboczy
 WORKDIR /app
@@ -26,4 +27,4 @@ COPY . .
 
 # 6. Uruchomienie aplikacji przez Gunicorn
 # main:app oznacza: plik main.py, obiekt app = Flask(__name__)
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "900", "main:app"]
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 2 --timeout 900 app:app
