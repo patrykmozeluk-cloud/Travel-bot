@@ -55,11 +55,6 @@ async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: st
             # Tworzymy listę przycisków
             keyboard = [[{"text": button_text, "url": button_url}]]
             
-            # --- NOWOŚĆ: Dodajemy przycisk komentarzy jeśli jest w configu ---
-            if config.CHAT_CHANNEL_URL:
-                keyboard.append([{"text": "💬 Skomentuj / Dyskusja", "url": config.CHAT_CHANNEL_URL}])
-            # ----------------------------------------------------------------
-
             payload = {
                 "chat_id": chat_id,
                 "photo": photo_url,
