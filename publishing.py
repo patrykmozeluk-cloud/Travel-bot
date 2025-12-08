@@ -208,7 +208,7 @@ async def publish_digest_async() -> str:
         page_url = response['url']
         log.info(f"Successfully created Telegra.ph page: {page_url}")
 
-        engaging_caption = "🔥 **GORĄCA SELEKCJA OFERT CZEKA!** 🔥\n\nSprawdź nasze najnowsze, zweryfikowane okazje. Niektóre z nich to prawdziwe perełki!\n\n<i>Kliknij poniżej, aby zobaczyć pełny przegląd!</i>"
+        engaging_caption = "🔥 <b>GORĄCA SELEKCJA OFERT CZEKA!</b> 🔥\n\nSprawdź nasze najnowsze, zweryfikowane okazje. Niektóre z nich to prawdziwe perełki!\n\n<i>Kliknij poniżej, aby zobaczyć pełny przegląd!</i>"
         digest_button_text = "👉 Zobacz Pełen Przegląd!"
         
         selected_photo_url = random.choice(config.DIGEST_IMAGE_URLS)
