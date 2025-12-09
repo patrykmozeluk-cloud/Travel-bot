@@ -17,37 +17,6 @@ from ai_processing import generate_social_message_ai
 log = logging.getLogger(__name__)
 
 
-async def send_social_telegram_message_async(message_content: str, chat_id: str, button_text: str, button_url: str, reply_to_message_id: int | None = None) -> int | None:
-    """Sends a social/promotional message with a button."""
-    async with make_async_client() as client:
-        try:
-            payload: Dict[str, Any] = {
-                "chat_id": chat_id,
-                "text": message_content,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-                "reply_markup": {
-                    "inline_keyboard": [[{"text": button_text, "url": button_url}]]
-                }
-            }
-            if reply_to_message_id:
-                payload["reply_to_message_id"] = reply_to_message_id
-
-            url = f"https://api.telegram.org/bot{config.TG_TOKEN}/sendMessage"
-            
-            r = await client.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
-            r.raise_for_status()
-            body = r.json()
-
-            if body.get("ok"):
-                log.info(f"Social message sent: {message_content[:60]}…")
-                return body.get("result", {}).get("message_id")
-            else:
-                log.error(f"Telegram returned ok=false for social message: {body}")
-        except Exception as e:
-            log.error(f"Telegram send error for social message to {chat_id}: {e}")
-    return None
-
 async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: str, button_text: str, button_url: str) -> int | None:
     """Sends a photo with a caption and an inline button."""
     async with make_async_client() as client:

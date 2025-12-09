@@ -9,7 +9,7 @@ import config
 from gcs_state import load_state, save_state_atomic, sanitizing_startup_check, prune_sent_links, remember_for_deletion, perform_delete_sweep
 from feed_parser import process_all_sources
 from ai_processing import analyze_batch, audit_offer_with_perplexity
-from publishing import publish_digest_async, send_social_telegram_message_async
+from publishing import publish_digest_async
 from utils import make_async_client 
 
 # ---------- LOGGING ----------
@@ -169,36 +169,6 @@ async def master_scheduler():
     else:
         log.info("Scheduler: Not a digest hour. Skipping digest.")
     
-    # Daily social post to channel
-    if now_utc.hour == config.SOCIAL_CHANNEL_POST_HOUR:
-        log.info(f"Scheduler: It's social post hour ({now_utc.hour}:00 UTC). Sending daily social post to channel.")
-        # We need to load state again here if it was modified by digest, or pass it around
-        # For simplicity, we'll assume a fresh state load for social post
-        state, generation = load_state() 
-        # Check if post was already sent today to prevent duplicates on retries
-        # This requires adding a 'last_social_post_date' to the state.
-        # For now, we'll rely on the hourly trigger to be idempotent enough,
-        # but a more robust check would involve comparing date components.
-        last_social_post_date_str = state.get("last_social_post_date")
-        if last_social_post_date_str:
-            last_social_post_date = datetime.fromisoformat(last_social_post_date_str).date()
-        else:
-            last_social_post_date = None
-
-        if not last_social_post_date or last_social_post_date != now_utc.date():
-            await send_social_telegram_message_async(
-                message_content=config.SOCIAL_CHANNEL_POST_TEXT,
-                chat_id=config.TELEGRAM_CHANNEL_ID,
-                button_text="💬 Dołącz do dyskusji!",
-                button_url=config.CHAT_CHANNEL_URL
-            )
-            state["last_social_post_date"] = now_utc.isoformat()
-            save_state_atomic(state, generation)
-            log.info("Scheduler: Daily social post sent and state updated.")
-        else:
-            log.info("Scheduler: Daily social post already sent today. Skipping.")
-
-
     log.info("Master scheduler run finished.")
     return "Scheduler run complete."
 

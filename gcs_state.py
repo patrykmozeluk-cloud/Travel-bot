@@ -41,7 +41,6 @@ def _default_state() -> Dict[str, Any]:
         "delete_queue": [],
         "last_ai_analysis_time": "1970-01-01T00:00:00Z",
         "digest_candidates": [],
-        "last_social_post_date": None
     }
 
 def _ensure_state_shapes(state: Dict[str, Any]):

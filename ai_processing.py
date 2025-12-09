@@ -206,28 +206,4 @@ Przykład struktury:
     except json.JSONDecodeError:
         log.error(f"Gemini API returned invalid JSON for batch: {response.text[:200]}")
         return []
-
-async def generate_social_message_ai(target: str) -> str | None:
-    model = get_gemini_model()
-    if not model:
-        log.error("Gemini AI model not initialized. Cannot generate social message.")
-        return None
-
-    # ... (prompt logic remains the same)
-    prompt_text = "..." # Placeholder for actual prompt logic
-
-    system_prompt = """
-Twoim zadaniem jest wygenerowanie posta na Telegram.
-Odpowiedź ZAWSZE w formacie JSON, zawierającym jeden klucz: \"post\".
-Przykład: {\"post\": \"Treść Twojego kreatywnego posta tutaj.\"}
-"""
-    log.info(f"Generating social message for {target} using Gemini AI via retry handler.")
-    response = await gemini_api_call_with_retry([system_prompt, prompt_text])
-
-    if not response or not response.text:
-        log.warning(f"Gemini API returned no response for social message generation ({target}) after retries.")
-        return None
-
-    message = response.text.strip()
-    log.info(f"Generated social message for {target}: {message[:70]}...")
-    return message
+async def audit_offer_with_perplexity(title: str, price: str, link: str) -> Dict[str, Any]:

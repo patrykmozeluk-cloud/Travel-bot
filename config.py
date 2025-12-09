@@ -15,9 +15,9 @@ def to_bool(value: str) -> bool:
 # ---------- ENVIRONMENT-BASED CONFIG ----------
 TG_TOKEN = env("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = env("TELEGRAM_CHANNEL_ID")
-TELEGRAM_CHAT_GROUP_ID = env("TELEGRAM_CHAT_GROUP_ID")
 TELEGRAM_CHANNEL_USERNAME = env("TELEGRAM_CHANNEL_USERNAME")
 CHAT_CHANNEL_URL = env("CHAT_CHANNEL_URL")
+
 TELEGRAPH_TOKEN = env("TELEGRAPH_TOKEN")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 PERPLEXITY_API_KEY = env("PERPLEXITY_API_KEY")
@@ -124,7 +124,3 @@ DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
 }
 
 GENERIC_FALLBACK_SELECTORS: List[str] = ['article h2 a', 'article h3 a', 'h2 a', 'h3 a']
-
-# ---------- SOCIAL POSTS ----------
-SOCIAL_CHANNEL_POST_TEXT = "💬 Co sądzicie o dzisiejszych okazjach? Podzielcie się wrażeniami w komentarzach!"
-SOCIAL_CHANNEL_POST_HOUR = int(env("SOCIAL_CHANNEL_POST_HOUR", "18")) # 18:00 UTC by default
