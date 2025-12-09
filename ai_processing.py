@@ -206,4 +206,3 @@ Przykład struktury:
     except json.JSONDecodeError:
         log.error(f"Gemini API returned invalid JSON for batch: {response.text[:200]}")
         return []
-async def audit_offer_with_perplexity(title: str, price: str, link: str) -> Dict[str, Any]:
