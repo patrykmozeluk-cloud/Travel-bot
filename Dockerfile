@@ -4,7 +4,6 @@ FROM python:3.11
 # 1. Ustawienia środowiska
 ENV PYTHONUNBUFFERED True
 ENV PORT 8080
-ENV PYTHONASYNCIODEBUG 1
 
 # 2. Folder roboczy
 WORKDIR /app
