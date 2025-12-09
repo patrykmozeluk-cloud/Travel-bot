@@ -11,7 +11,6 @@ from datetime import datetime # Keep datetime for strftime
 import config
 from utils import make_async_client
 from gcs_state import load_state, save_state_atomic
-from ai_processing import generate_social_message_ai
 
 
 log = logging.getLogger(__name__)
