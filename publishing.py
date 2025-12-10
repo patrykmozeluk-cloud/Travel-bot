@@ -12,6 +12,21 @@ import config
 from utils import make_async_client
 from gcs_state import load_state, save_state_atomic
 
+_TRAVEL_IMAGES = list(set([
+    "https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1500835556837-99ac94a94552?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1533105079780-92b9be482077?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1504609773096-104ff2c73ba4?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1498503182468-3b51cbb6cb24?q=80&w=1000&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1530521954074-e64f6810b32d?q=80&w=1000&auto=format&fit=crop",
+    # Original DIGEST_IMAGE_URLS from config.py
+    "https://images.unsplash.com/photo-1516483638261-f4dbaf036963?q=80&w=2800&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+    "https://images.pexels.com/photos/3408744/pexels-photo-3408744.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+    "https://cdn.pixabay.com/photo/2017/01/20/00/30/maldives-1993704_1280.jpg"
+]))
 
 log = logging.getLogger(__name__)
 
@@ -118,17 +133,17 @@ async def publish_digest_async() -> str:
     unique_offers = list(unique_offers_dict.values())
     log.info(f"Found {len(unique_offers)} unique, valid offers for the digest.")
 
-    # Sort offers: 'SUPER OKAZJA' first, then 'CENA RYNKOWA', then alphabetically
+    # Sort offers: 'GEM' first, then 'FAIR', then alphabetically
     def sort_key(offer):
-        verdict_order = {"SUPER OKAZJA": 1, "CENA RYNKOWA": 2}
+        verdict_order = {"GEM": 1, "FAIR": 2} # Updated verdicts
         return (verdict_order.get(offer.get('verdict'), 99), offer.get('original_title', '').lower())
 
     sorted_offers = sorted(unique_offers, key=sort_key)
     
-    super_deals = [o for o in sorted_offers if o.get('verdict') == "SUPER OKAZJA"]
-    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "CENA RYNKOWA"]
+    super_deals = [o for o in sorted_offers if o.get('verdict') == "GEM"] # Updated verdict
+    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "FAIR"] # Updated verdict
 
-    log.info(f"Digest breakdown: {len(super_deals)} SUPER OKAZJA, {len(market_price_deals)} CENA RYNKOWA.")
+    log.info(f"Digest breakdown: {len(super_deals)} GEM deals, {len(market_price_deals)} FAIR deals.")
 
     telegraph = Telegraph(config.TELEGRAPH_TOKEN)
     
@@ -138,19 +153,19 @@ async def publish_digest_async() -> str:
         content_html += "<h3>💎 Super Okazje Dnia! 💎</h3>"
         content_html += "<p><i>Te oferty to prawdziwe perełki, które szybko znikają!</i></p>"
         for offer in super_deals:
-            content_html += f"<h4>{html.escape(offer.get('original_title', 'Brak tytułu'))}</h4>"
-            if offer.get('price'): content_html += f"<p><b>Cena:</b> {html.escape(offer['price'])}</p>"
-            if offer.get('analysis'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['analysis'])}</p>"
+            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
+            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
+            if offer.get('telegram_message'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['telegram_message'])}</p>" # Use new analysis field
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
     if market_price_deals:
-        content_html += "<h3>Pozostałe Zweryfikowane Oferty</h3>"
+        content_html += "<h3>✅ Pozostałe Zweryfikowane Oferty ✅</h3>" # Added emoji to both sides
         content_html += "<p><b>Dobre, solidne oferty, które warto rozważyć.</b></p><br/>"
         for offer in market_price_deals:
-            content_html += f"<h4>{html.escape(offer.get('original_title', 'Brak tytułu'))}</h4>"
-            if offer.get('price'): content_html += f"<p><b>Cena:</b> {html.escape(offer['price'])}</p>"
-            if offer.get('analysis'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['analysis'])}</p>"
+            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
+            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
+            if offer.get('telegram_message'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['telegram_message'])}</p>" # Use new analysis field
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
     
@@ -179,7 +194,7 @@ async def publish_digest_async() -> str:
         engaging_caption = "🔥 <b>GORĄCA SELEKCJA OFERT CZEKA!</b> 🔥\n\nSprawdź nasze najnowsze, zweryfikowane okazje. Niektóre z nich to prawdziwe perełki!\n\n<i>Kliknij poniżej, aby zobaczyć pełny przegląd!</i>"
         digest_button_text = "👉 Zobacz Pełen Przegląd!"
         
-        selected_photo_url = random.choice(config.DIGEST_IMAGE_URLS)
+        selected_photo_url = random.choice(_TRAVEL_IMAGES)
 
         if config.TELEGRAM_CHANNEL_ID:
             await send_photo_with_button_async(
