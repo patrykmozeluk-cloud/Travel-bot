@@ -106,9 +106,7 @@ async def publish_digest_async() -> str:
 
     digest_candidates = state.get("digest_candidates", [])
     
-    # --- DIAGNOSTIC LOG ---
-    log.info(f"DIAGNOSTIC: Starting publish_digest_async with candidates: {json.dumps(digest_candidates, indent=2, ensure_ascii=False)}")
-    # ----------------------
+    # --- DIAGNOSTIC LOG REMOVED ---
 
     if not digest_candidates:
         log.info("Digest candidates list is empty. Skipping digest generation.")
@@ -133,17 +131,22 @@ async def publish_digest_async() -> str:
     unique_offers = list(unique_offers_dict.values())
     log.info(f"Found {len(unique_offers)} unique, valid offers for the digest.")
 
-    # Sort offers: 'GEM' first, then 'FAIR', then alphabetically
+    # Log rejected offers before sorting
+    for offer in unique_offers:
+        if offer.get('verdict') not in ["SUPER OKAZJA", "CENA RYNKOWA"]:
+            log.info(f"Offer '{offer.get('original_title', 'Unknown')}' rejected. Reason: Verdict is '{offer.get('verdict', 'N/A')}'.")
+
+    # Sort offers: 'SUPER OKAZJA' first, then 'CENA RYNKOWA', then alphabetically
     def sort_key(offer):
-        verdict_order = {"GEM": 1, "FAIR": 2} # Updated verdicts
+        verdict_order = {"SUPER OKAZJA": 1, "CENA RYNKOWA": 2} 
         return (verdict_order.get(offer.get('verdict'), 99), offer.get('original_title', '').lower())
 
     sorted_offers = sorted(unique_offers, key=sort_key)
     
-    super_deals = [o for o in sorted_offers if o.get('verdict') == "GEM"] # Updated verdict
-    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "FAIR"] # Updated verdict
+    super_deals = [o for o in sorted_offers if o.get('verdict') == "SUPER OKAZJA"]
+    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "CENA RYNKOWA"]
 
-    log.info(f"Digest breakdown: {len(super_deals)} GEM deals, {len(market_price_deals)} FAIR deals.")
+    log.info(f"Digest breakdown: {len(super_deals)} SUPER OKAZJA deals, {len(market_price_deals)} CENA RYNKOWA deals.")
 
     telegraph = Telegraph(config.TELEGRAPH_TOKEN)
     
