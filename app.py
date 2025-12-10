@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import config
 from gcs_state import load_state, save_state_atomic, sanitizing_startup_check, prune_sent_links, remember_for_deletion, perform_delete_sweep
 from feed_parser import process_all_sources
-from ai_processing import analyze_batch, audit_offer_with_perplexity
+from ai_processing import analyze_batch, run_full_perplexity_audit # Updated import
 from publishing import publish_digest_async
 from utils import make_async_client 
 
@@ -98,51 +98,35 @@ async def process_and_publish_offers():
             log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}'. Skipping publication.")
             # No further action, just recorded as sent
         elif category == "HIT":
-            log.info(f"Offer '{original_candidate['title'][:40]}...' is a 'HIT'. Extracting data with Perplexity...")
+            log.info(f"Offer '{original_candidate['title'][:40]}...' is a 'HIT'. Running full audit with Perplexity...")
 
-            # Step 1: Data Extraction
-            extraction_result = await extract_offer_data_with_perplexity(
+            offer_price = original_candidate.get('price') or ai_result.get('price', 'Brak ceny')
+            
+            # Single call for combined extraction and audit
+            audit_result = await run_full_perplexity_audit(
+                title=original_candidate['title'],
+                price=offer_price,
                 link=original_candidate['link']
             )
 
-            if extraction_result.get('verdict') in ["ERROR", "SKIPPED"]:
-                log.info(f"Perplexity data extraction for '{original_candidate['title'][:40]}...' failed or skipped with verdict '{extraction_result.get('verdict')}'. Not proceeding to audit.")
-                continue # Skip to next offer
-
-            log.info(f"Perplexity data extraction successful for '{original_candidate['title'][:40]}...'. Proceeding to audit.")
-            
-            # Step 2: Verification and Auditing
-            audit_result = await audit_offer_with_perplexity(
-                extracted_data=extraction_result # Pass the full extracted data
-            )
-
             verdict = audit_result.get("verdict")
-            analysis = audit_result.get("analysis")
 
-            if verdict == "RISK" or audit_result.get("telegram_message") == "NULL": # Changed from "SKIP" or "WYGASŁA" to "RISK" or "NULL" as per new prompt
-                log.info(f"Perplexity audit for '{extracted_data.get('hotel_name', original_candidate['title'][:40])}' returned '{verdict}' or 'NULL' message. Not adding to digest.")
+            if verdict in ["ERROR", "SKIPPED", "RISK"] or audit_result.get("telegram_message") == "NULL":
+                log.info(f"Perplexity audit for '{original_candidate['title'][:40]}...' returned '{verdict}'. Not adding to digest.")
             else:
-                log.info(f"Perplexity audit for '{extracted_data.get('hotel_name', original_candidate['title'][:40])}' with verdict '{verdict}'. Adding to digest candidates.")
+                log.info(f"Perplexity audit for '{original_candidate['title'][:40]}...' with verdict '{verdict}'. Adding to digest candidates.")
                 
-                # Check for duplicates before adding to digest_candidates
                 existing_candidate_keys = {c.get('dedup_key') for c in state["digest_candidates"]}
                 if original_candidate['dedup_key'] not in existing_candidate_keys:
+                    # Combine original data with the rich data from the single audit call
                     candidate_to_add = {
-                        **original_candidate, # Start with original candidate data
-                        **extraction_result,  # Add all extracted data
-                        **audit_result        # Add all audit data, overwriting if keys conflict (e.g., verdict, hotel_name)
+                        **original_candidate,
+                        **audit_result
                     }
-                    # Ensure final verdict and message are from audit_result
-                    candidate_to_add['verdict'] = audit_result.get('verdict', extraction_result.get('verdict', 'UNKNOWN'))
-                    candidate_to_add['telegram_message'] = audit_result.get('telegram_message')
-                    candidate_to_add['hotel_name'] = audit_result.get('hotel_name', extraction_result.get('hotel_name', 'Brak Nazwy Hotelu')) # Prioritize audit hotel_name
-                    
                     state["digest_candidates"].append(candidate_to_add)
-                    # --- DIAGNOSTIC LOG ---
-                    log.info(f"DIAGNOSTIC: Added to digest_candidates: {json.dumps(candidate_to_add, indent=2, ensure_ascii=False)}")
-                    # ----------------------
+                    log.info(f"DIAGNOSTIC: Added to digest_candidates: {candidate_to_add}")
                 else:
-                    log.info(f"Offer '{extracted_data.get('hotel_name', original_candidate['title'][:40])}' already exists in digest candidates (deduplicated).")
+                    log.info(f"Offer '{original_candidate['title'][:40]}...' already exists in digest candidates (deduplicated).")
         else:
             log.warning(f"Unknown category '{category}' for offer '{original_candidate['title'][:40]}...'. Skipping.")
 
