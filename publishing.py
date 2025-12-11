@@ -105,8 +105,6 @@ async def publish_digest_async() -> str:
         return "Error: Telegraph token not configured."
 
     digest_candidates = state.get("digest_candidates", [])
-    
-    # --- DIAGNOSTIC LOG REMOVED ---
 
     if not digest_candidates:
         log.info("Digest candidates list is empty. Skipping digest generation.")
@@ -115,7 +113,7 @@ async def publish_digest_async() -> str:
     # Filter out malformed candidates from previous failed runs
     valid_candidates = [
         c for c in digest_candidates 
-        if c.get('verdict') and c.get('analysis') and c.get('dedup_key')
+        if c.get('verdict') and c.get('dedup_key')
     ]
     if len(valid_candidates) < len(digest_candidates):
         log.warning(f"Filtered out {len(digest_candidates) - len(valid_candidates)} malformed digest candidates.")
@@ -156,9 +154,10 @@ async def publish_digest_async() -> str:
         content_html += "<h3>💎 Super Okazje Dnia! 💎</h3>"
         content_html += "<p><i>Te oferty to prawdziwe perełki, które szybko znikają!</i></p>"
         for offer in super_deals:
+            tekst = offer.get('telegram_message') or offer.get('analysis')
             content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
-            if offer.get('telegram_message'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['telegram_message'])}</p>" # Use new analysis field
+            if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
@@ -166,9 +165,10 @@ async def publish_digest_async() -> str:
         content_html += "<h3>✅ Pozostałe Zweryfikowane Oferty ✅</h3>" # Added emoji to both sides
         content_html += "<p><b>Dobre, solidne oferty, które warto rozważyć.</b></p><br/>"
         for offer in market_price_deals:
+            tekst = offer.get('telegram_message') or offer.get('analysis')
             content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
-            if offer.get('telegram_message'): content_html += f"<p><b>Analiza:</b> {html.escape(offer['telegram_message'])}</p>" # Use new analysis field
+            if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
     

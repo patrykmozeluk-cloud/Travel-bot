@@ -10,3 +10,5 @@ google-generativeai
 telegraph
 grpcio>=1.62.0
 feedparser
+cloudscraper
+requests

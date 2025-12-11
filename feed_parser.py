@@ -4,6 +4,8 @@ import asyncio
 import random
 import feedparser
 import httpx
+import cloudscraper
+import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from typing import List, Tuple, Dict
@@ -12,6 +14,22 @@ import config
 from utils import make_async_client
 
 log = logging.getLogger(__name__)
+
+# --- Cloudscraper Helper ---
+def fetch_with_cloudscraper(url: str) -> bytes | None:
+    """
+    Synchronous function to fetch a URL using cloudscraper.
+    This should be run in a thread to avoid blocking asyncio.
+    """
+    try:
+        scraper = cloudscraper.create_scraper()
+        r = scraper.get(url, timeout=config.HTTP_TIMEOUT)
+        r.raise_for_status()
+        log.info(f"Successfully fetched with cloudscraper: {url}")
+        return r.content
+    except Exception as e:
+        log.warning(f"Cloudscraper failed for {url}: {e}")
+        return None
 
 # Concurrency & Rate Limiting Helpers
 _host_semaphores: Dict[str, asyncio.Semaphore] = {}
@@ -27,9 +45,14 @@ async def _jitter():
 
 def build_headers(url: str) -> Dict[str, str]:
     host = urlparse(url).netloc.lower().replace("www.", "")
-    headers = config.BASE_HEADERS.copy()
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml;q=0.8,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    }
+    # Allow for domain-specific overrides
     domain_headers = config.DOMAIN_CONFIG.get(host, {}).get("headers")
-    if domain_headers: headers.update(domain_headers)
+    if domain_headers: 
+        headers.update(domain_headers)
     return headers
 
 def get_sources(filename: str) -> List[str]:
@@ -42,22 +65,37 @@ def get_sources(filename: str) -> List[str]:
         return []
 
 async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str, str, str]]:
-    """Fetches and parses a single RSS feed."""
+    """Fetches and parses a single RSS feed, using cloudscraper for specific domains."""
     posts = []
+    content = None
     try:
         async with _sem_for(url):
             await _jitter()
-            r = await client.get(url, headers=build_headers(url))
-        if r.status_code == 200:
-            feed = feedparser.parse(r.content)
+            
+            host = urlparse(url).netloc.lower()
+            
+            if config.SECRETFLYING_HOST in host:
+                log.info(f"Using cloudscraper for {url}")
+                content = await asyncio.to_thread(fetch_with_cloudscraper, url)
+            else:
+                r = await client.get(url, headers=build_headers(url))
+                if r.status_code == 200:
+                    content = r.content
+                else:
+                    log.warning(f"HTTPX fetch for {url} failed with status code: {r.status_code}")
+
+        if content:
+            feed = feedparser.parse(content)
             for entry in feed.entries:
                 guid = entry.get("guid", entry.get("link"))
                 if entry.get("title") and entry.get("link") and guid:
                     posts.append((entry.title, entry.link, guid, url))
             log.info(f"Fetched {len(posts)} posts from RSS: {url}")
             return posts[:config.MAX_PER_DOMAIN]
+
     except Exception as e:
-        log.warning(f"Error fetching RSS {url}: {e}", exc_info=True)
+        log.warning(f"Error processing RSS feed {url}: {e}", exc_info=True)
+        
     return posts
 
 async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:

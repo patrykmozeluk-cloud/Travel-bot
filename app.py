@@ -9,11 +9,16 @@ import config
 from gcs_state import load_state, save_state_atomic, sanitizing_startup_check, prune_sent_links, remember_for_deletion, perform_delete_sweep
 from feed_parser import process_all_sources
 from ai_processing import analyze_batch, run_full_perplexity_audit # Updated import
-from publishing import publish_digest_async
+from publishing import publish_digest_async, send_telegram_message_async
 from utils import make_async_client 
 
 # ---------- LOGGING ----------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(file_handler)
+
 log = logging.getLogger(__name__)
 
 # ---------- APP INITIALIZATION ----------
@@ -71,7 +76,7 @@ async def process_and_publish_offers():
         save_state_atomic(state, generation)
         return "Run complete. AI analysis yielded no results."
 
-    # 4. Process AI Results and Distribute Content
+    # 4. Process AI Results and Distribute Content ("Sztos vs Reszta")
     candidates_by_id = {c['id']: c for c in detailed_candidates}
     now_utc_iso = datetime.now(timezone.utc).isoformat()
     
@@ -87,6 +92,7 @@ async def process_and_publish_offers():
             continue
             
         category = ai_result.get("category")
+        score = ai_result.get("score")
         if not category:
             log.warning(f"AI result for {original_candidate['title']} has no category. Skipping.")
             continue
@@ -94,41 +100,51 @@ async def process_and_publish_offers():
         # Add to sent_links regardless of category to prevent reprocessing
         state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
 
-        if category in ["IGNORE", "SILENT"]:
-            log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}'. Skipping publication.")
-            # No further action, just recorded as sent
-        elif category == "HIT":
-            log.info(f"Offer '{original_candidate['title'][:40]}...' is a 'HIT'. Running full audit with Perplexity...")
+        if score == 10 and category == "PUSH":
+            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'SZTOS' (Score 10). Sending immediately.")
+            message = f"🔥 **SZTOS ALERT!** 🔥\n\n*{ai_result.get('title')}*\n\nCena: *{ai_result.get('price')}*"
+            
+            if config.TELEGRAM_CHANNEL_ID:
+                message_id = await send_telegram_message_async(
+                    message_content=message,
+                    link=original_candidate['link'],
+                    chat_id=config.TELEGRAM_CHANNEL_ID
+                )
+                if message_id:
+                    remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id)
+            
+            if config.TELEGRAM_CHAT_GROUP_ID:
+                message_id_group = await send_telegram_message_async(
+                    message_content=message,
+                    link=original_candidate['link'],
+                    chat_id=config.TELEGRAM_CHAT_GROUP_ID
+                )
+                if message_id_group:
+                    remember_for_deletion(state, config.TELEGRAM_CHAT_GROUP_ID, message_id_group)
 
+        elif score and score >= 7 and category == "DIGEST":
+            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'DIGEST' candidate (Score: {score}). Running Perplexity audit.")
             offer_price = original_candidate.get('price') or ai_result.get('price', 'Brak ceny')
             
-            # Single call for combined extraction and audit
             audit_result = await run_full_perplexity_audit(
-                title=original_candidate['title'],
+                title=ai_result.get('title'),
                 price=offer_price,
                 link=original_candidate['link']
             )
-
             verdict = audit_result.get("verdict")
 
             if verdict in ["ERROR", "SKIPPED", "RISK"] or audit_result.get("telegram_message") == "NULL":
-                log.info(f"Perplexity audit for '{original_candidate['title'][:40]}...' returned '{verdict}'. Not adding to digest.")
+                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' returned '{verdict}'. Not adding to digest.")
             else:
-                log.info(f"Perplexity audit for '{original_candidate['title'][:40]}...' with verdict '{verdict}'. Adding to digest candidates.")
-                
-                existing_candidate_keys = {c.get('dedup_key') for c in state["digest_candidates"]}
-                if original_candidate['dedup_key'] not in existing_candidate_keys:
-                    # Combine original data with the rich data from the single audit call
-                    candidate_to_add = {
-                        **original_candidate,
-                        **audit_result
-                    }
+                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' with verdict '{verdict}'. Adding to digest.")
+                existing_keys = {c.get('dedup_key') for c in state.get("digest_candidates", [])}
+                if original_candidate['dedup_key'] not in existing_keys:
+                    candidate_to_add = {**original_candidate, **audit_result, 'ai_score': score}
                     state["digest_candidates"].append(candidate_to_add)
-                    log.info(f"DIAGNOSTIC: Added to digest_candidates: {candidate_to_add}")
                 else:
-                    log.info(f"Offer '{original_candidate['title'][:40]}...' already exists in digest candidates (deduplicated).")
+                    log.info(f"Offer '{ai_result.get('title', 'N/A')}' already in digest candidates. Skipping add.")
         else:
-            log.warning(f"Unknown category '{category}' for offer '{original_candidate['title'][:40]}...'. Skipping.")
+            log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}' (Score: {score}). Skipping publication.")
 
     log.info("Processing complete. Saving final state.")
     prune_sent_links(state)

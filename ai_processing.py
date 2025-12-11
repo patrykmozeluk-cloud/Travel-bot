@@ -174,44 +174,46 @@ async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]
         return []
 
     # New "Silent Selector" prompt
-    system_prompt = """Jesteś surowym filtrem analitycznym dla ofert turystycznych.
-TWOJE ZADANIE: Przeanalizuj oferty z wejścia {INPUT_DATA}, oceń je w skali 1-10 i przypisz kategorię. W Twojej odpowiedzi, KAŻDY obiekt MUSI zawierać oryginalne `id` z obiektu wejściowego.
-WAŻNA ZASADA: Tytuły chwytliwe/clickbaitowe oceniaj ostrożnie. Jeśli oferta (cena, zawartość linku) jest faktycznie dobra, nie obniżaj oceny tylko z powodu chwytliwego tytułu. Skup się na merytoryce.
+    system_prompt = """Jesteś surowym filtrem analitycznym dla ofert turystycznych. Twoim zadaniem jest ocena ofert i ich kategoryzacja.
+Analizuj oferty w ich oryginalnym języku (głównie angielski), ale Twoja odpowiedź i wszystkie dane tekstowe MUSZĄ być w języku polskim.
 
-KOTWICE OCEN (TWOJA SKALA):
-- 9-10: Błąd cenowy, oferta znacznie poniżej ceny rynkowej (np. -50%), historyczne minimum.
-- 6-8: Dobra, solidna promocja, cena niższa niż zwykle, ale nie jest to błąd cenowy.
-- 1-5: Cena rynkowa, standardowa lub zawyżona. Oferta nie warta uwagi.
+NAJWAŻNIEJSZE ZASADY:
+1.  **ZERO ZGADYWANA**: Nie zgaduj nazwy linii lotniczej, hotelu ani innych detali. Jeśli informacja nie jest jawnie podana, pomiń ją. Lepiej zwrócić mniej danych niż nieprawdziwe.
+2.  **ID OBOWIĄZKOWE**: W Twojej odpowiedzi, KAŻDY obiekt MUSI zawierać oryginalne `id` z obiektu wejściowego.
+3.  **MERYTORYKA > CLICKBAIT**: Tytuły chwytliwe oceniaj ostrożnie. Skup się na faktycznej wartości oferty (cena, zawartość linku), a nie na krzykliwym tytule.
 
-KATEGORIE I WYMAGANE DANE:
+NOWA SKALA OCEN I AKCJE:
+- **10/10 (SZTOS / BŁĄD CENOWY)**: Absolutny hit. Oferta tak dobra, że prawdopodobnie jest to błąd cenowy lub historyczne minimum. Wymaga natychmiastowej publikacji.
+- **9/10 (GEM / PEREŁKA)**: Wyjątkowo dobra oferta, znacznie poniżej standardów rynkowych. Idealny kandydat do przeglądu ofert (digest).
+- **7-8/10 (FAIR / SOLIDNA OFERTA)**: Dobra, solidna promocja. Cena jest niższa niż zwykle, warta uwagi. Kandydat do przeglądu ofert (digest).
+- **1-6/10 (IGNORE / IGNORUJ)**: Cena rynkowa, standardowa, zawyżona lub po prostu spam. Oferta niewarta uwagi.
 
-1. KATEGORIA "HIT" (Ocena 9-10):
-   - Definicja: Błąd cenowy, historyczne minimum, "sztos".
-   - Akcja: Zwróć PEŁNE dane (tytuł, cena, link). To trafi do weryfikacji przez Perplexity.
+KATEGORIE I WYMAGANE DANE W ODPOWIEDZI:
 
-2. KATEGORIA "SILENT" (Ocena 6-8):
-   - Definicja: Dobra oferta, ale nie na kanał.
-   - Akcja: Zwróć TYLKO link i kategorię. Służy do archiwizacji (banowania duplikatów).
+1.  **KATEGORIA "PUSH" (Ocena 10)**:
+    -   Akcja: Musisz zwrócić PEŁNE dane: `id`, `link`, `title`, `price`, `score` (czyli 10) i `category` ("PUSH").
 
-3. KATEGORIA "IGNORE" (Ocena 1-5):
-   - Definicja: Cena rynkowa, drogo, spam.
-   - Akcja: Zwróć TYLKO link i kategorię. Służy do zbanowania linku.
+2.  **KATEGORIA "DIGEST" (Ocena 7-9)**:
+    -   Akcja: Musisz zwrócić PEŁNE dane: `id`, `link`, `title`, `price`, `score` (w zakresie 7-9) i `category` ("DIGEST").
+
+3.  **KATEGORIA "IGNORE" (Ocena 1-6)**:
+    -   Akcja: Wystarczy, że zwrócisz `id`, `link`, `category` ("IGNORE") i `score`.
 
 FORMAT WYJŚCIOWY (CZYSTY JSON):
-Zwróć wyłączenie listę obiektów JSON. Bez markdowna.
+Zwróć TYLKO listę obiektów JSON, bez żadnych dodatkowych opisów, formatowania markdown czy komentarzy.
 
-Przykład struktury:
+Przykład:
 [
-  {{ "id": 0, "link": "url_do_hita", "title": "Malediwy", "price": "1500 PLN", "score": 9, "category": "HIT" }},
-  {{ "id": 1, "link": "url_do_sredniej", "category": "SILENT" }},
-  {{ "id": 2, "link": "url_do_slabej", "category": "IGNORE" }}
+  { "id": 0, "link": "url_do_sztosa", "title": "Tytuł sztosa", "price": "999 PLN", "score": 10, "category": "PUSH" },
+  { "id": 1, "link": "url_do_perelki", "title": "Tytuł perełki", "price": "2500 PLN", "score": 9, "category": "DIGEST" },
+  { "id": 2, "link": "url_do_slabej", "score": 4, "category": "IGNORE" }
 ]"""
     
     user_message = json.dumps(candidates, indent=2)
 
-    log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI with 'Silent Selector' prompt.")
+    log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI with 'Sztos vs Reszta' prompt.")
     
-    full_prompt = [system_prompt.format(INPUT_DATA=user_message)]
+    full_prompt = [system_prompt, user_message]
 
     response = await gemini_api_call_with_retry(full_prompt)
 
@@ -220,17 +222,18 @@ Przykład struktury:
         return []
         
     try:
-        
-        ai_results = json.loads(response.text)
+        # Attempt to clean the response from markdown and then load
+        cleaned_text = re.sub(r'```json\n|```', '', response.text).strip()
+        ai_results = json.loads(cleaned_text)
         
         if not isinstance(ai_results, list):
             log.error(f"Gemini API returned data that is not a list: {ai_results}")
             return []
         
-        # Add digest_timestamp for HIT items
+        # Add digest_timestamp for DIGEST items
         for item in ai_results:
-            if item.get("category") == "HIT":
-                item["digest_timestamp"] = datetime.utcnow().isoformat() + "Z" # "Z" for UTC timezone
+            if item.get("category") == "DIGEST":
+                item["digest_timestamp"] = datetime.utcnow().isoformat() + "Z"
         
         log.info(f"AI processed batch and returned {len(ai_results)} categorized results.")
         return ai_results

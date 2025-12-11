@@ -7,5 +7,5 @@ def make_async_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=config.HTTP_TIMEOUT, 
         follow_redirects=True, 
-        http2=True
+        http2=False
     )

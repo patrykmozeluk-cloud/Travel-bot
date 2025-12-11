@@ -26,4 +26,4 @@ COPY . .
 
 # 6. Uruchomienie aplikacji przez Gunicorn
 # main:app oznacza: plik main.py, obiekt app = Flask(__name__)
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 2 --timeout 900 app:app
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 2 --timeout 900 --log-level info app:app
