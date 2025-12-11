@@ -151,7 +151,7 @@ async def publish_digest_async() -> str:
     content_html = ""
 
     if super_deals:
-        content_html += "<h3>💎 Super Okazje Dnia! 💎</h3>"
+        content_html += "<h3>💎 Perełki Dnia (GEM) 💎</h3>"
         content_html += "<p><i>Te oferty to prawdziwe perełki, które szybko znikają!</i></p>"
         for offer in super_deals:
             tekst = offer.get('telegram_message') or offer.get('analysis')
@@ -162,7 +162,7 @@ async def publish_digest_async() -> str:
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
     if market_price_deals:
-        content_html += "<h3>✅ Pozostałe Zweryfikowane Oferty ✅</h3>" # Added emoji to both sides
+        content_html += "<h3>✅ Dobre Okazje (FAIR) ✅</h3>"
         content_html += "<p><b>Dobre, solidne oferty, które warto rozważyć.</b></p><br/>"
         for offer in market_price_deals:
             tekst = offer.get('telegram_message') or offer.get('analysis')
