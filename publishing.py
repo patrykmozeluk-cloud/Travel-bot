@@ -95,10 +95,17 @@ async def send_telegram_message_async(message_content: str, link: str, chat_id: 
     return None
 
 
-async def publish_digest_async() -> str:
-    """Generates and publishes the digest of top offers to Telegraph and posts a link to Telegram."""
+async def publish_digest_async(state: Dict[str, Any] | None = None, generation: int | None = None) -> str:
+    """
+    Generates and publishes the digest of top offers to Telegraph and posts a link to Telegram.
+    If state and generation are not provided, it loads them.
+    """
     log.info("Starting digest generation...")
-    state, generation = load_state()
+    
+    # If state is not passed, load it. This supports manual runs.
+    if state is None or generation is None:
+        log.info("State not provided, loading from GCS for a standalone run.")
+        state, generation = load_state()
 
     if not config.TELEGRAPH_TOKEN:
         log.error("TELEGRAPH_TOKEN is not configured. Cannot publish digest.")

@@ -26,38 +26,23 @@ app = Flask(__name__)
 
 # ---------- CORE APPLICATION LOGIC ----------
 
-async def process_and_publish_offers():
+async def process_and_publish_offers(state: dict, generation: int) -> bool:
     """
     Main orchestration function.
+    Accepts the state and generation, modifies the state, and returns True if modified.
     """
     log.info("Starting a full processing run...")
-    state, generation = load_state()
+    state_modified = False
 
-    # 1. Initial State Maintenance
-    fixed_count = sanitizing_startup_check(state)
-    if fixed_count > 0:
-        log.warning(f"CRITICAL REPAIR: Found and fixed {fixed_count} corrupted entries in state file.")
-        try:
-            save_state_atomic(state, generation)
-            log.info("Successfully saved repaired state. Reloading state to continue run.")
-            state, generation = load_state()
-        except Exception as e:
-            log.critical(f"CRITICAL FAILURE: Could not save repaired state file. Aborting run. Error: {e}")
-            return "Critical: State repair failed during save."
-
-    # 2. Fetch and Prepare Candidates
+    # 1. Fetch and Prepare Candidates
     detailed_candidates = await process_all_sources()
     
     if not detailed_candidates:
-        log.info("No new candidates to process. Pruning old links and finishing run.")
-        prune_sent_links(state)
-        try: 
-            save_state_atomic(state, generation)
-        except Exception as e:
-            log.critical(f"FINAL STATE SAVE FAILED after pruning: {e}")
-        return "Run complete. No new posts."
+        log.info("No new candidates to process. Pruning old links.")
+        pruned_count = prune_sent_links(state)
+        return pruned_count > 0
 
-    # 3. AI Analysis
+    # 2. AI Analysis
     log.info(f"Proceeding with AI analysis for {len(detailed_candidates)} candidates.")
     
     candidate_chunks = [detailed_candidates[i:i + config.AI_BATCH_SIZE] for i in range(0, len(detailed_candidates), config.AI_BATCH_SIZE)]
@@ -72,11 +57,10 @@ async def process_and_publish_offers():
 
     if not all_ai_results:
         log.warning("AI analysis returned no results for any batch. Pruning and finishing.")
-        prune_sent_links(state)
-        save_state_atomic(state, generation)
-        return "Run complete. AI analysis yielded no results."
+        pruned_count = prune_sent_links(state)
+        return pruned_count > 0
 
-    # 4. Process AI Results and Distribute Content ("Sztos vs Reszta")
+    # 3. Process AI Results and Distribute Content ("Sztos vs Reszta")
     candidates_by_id = {c['id']: c for c in detailed_candidates}
     now_utc_iso = datetime.now(timezone.utc).isoformat()
     
@@ -103,6 +87,7 @@ async def process_and_publish_offers():
             "category": category,
             "score": score
         }
+        state_modified = True
 
         if score == 10 and category == "PUSH":
             log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'SZTOS' candidate (Score 10). Running Perplexity audit for verification.")
@@ -118,7 +103,6 @@ async def process_and_publish_offers():
             if verdict in ["GEM", "FAIR"]:
                 log.info(f"Perplexity audit VERIFIED Sztos offer with verdict '{verdict}'. Sending immediately.")
                 
-                # Use enriched data from Perplexity for the message
                 message = f"🔥 **SZTOS ALERT!** 🔥\n\n{audit_result.get('telegram_message', ai_result.get('title'))}"
                 
                 if config.TELEGRAM_CHANNEL_ID:
@@ -129,6 +113,7 @@ async def process_and_publish_offers():
                     )
                     if message_id:
                         remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, original_candidate['source_url'])
+                        state_modified = True
             else:
                 log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending.")
 
@@ -149,6 +134,7 @@ async def process_and_publish_offers():
                 if original_candidate['dedup_key'] not in existing_keys:
                     candidate_to_add = {**original_candidate, **audit_result, 'ai_score': score}
                     state["digest_candidates"].append(candidate_to_add)
+                    state_modified = True
                 else:
                     log.info(f"Offer '{ai_result.get('title', 'N/A')}' already in digest candidates. Skipping add.")
             else:
@@ -156,10 +142,9 @@ async def process_and_publish_offers():
         else:
             log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}' (Score: {score}). Skipping publication.")
 
-    log.info("Processing complete. Saving final state.")
-    prune_sent_links(state)
-    save_state_atomic(state, generation)
-    return "Run complete."
+    log.info("Processing complete.")
+    pruned_count = prune_sent_links(state)
+    return state_modified or (pruned_count > 0)
 
 
 async def master_scheduler():
@@ -167,25 +152,58 @@ async def master_scheduler():
     now_utc = datetime.now(timezone.utc)
     log.info(f"Master scheduler running at {now_utc.isoformat()}")
 
-    log.info("Scheduler: Kicking off ingestion and processing.")
-    await process_and_publish_offers()
-    
-    # Perform delete sweep hourly
+    # --- STATE INITIALIZATION ---
+    # Load state once at the beginning of the run.
     state, generation = load_state()
+    state_was_modified = False
+
+    # Perform initial sanitizing check. If it fixes something, save immediately.
+    fixed_count = sanitizing_startup_check(state)
+    if fixed_count > 0:
+        log.warning(f"CRITICAL REPAIR: Found and fixed {fixed_count} corrupted entries in state file.")
+        try:
+            save_state_atomic(state, generation)
+            log.info("Successfully saved repaired state. Reloading to ensure consistency.")
+            state, generation = load_state() # Reload after critical repair
+        except Exception as e:
+            log.critical(f"CRITICAL FAILURE: Could not save repaired state file. Aborting run. Error: {e}")
+            return "Critical: State repair failed during save."
+
+    # --- CORE LOGIC ---
+    # Run ingestion and processing. This function will now modify the state object directly.
+    log.info("Scheduler: Kicking off ingestion and processing.")
+    processed_new = await process_and_publish_offers(state, generation)
+    state_was_modified = state_was_modified or processed_new
+
+    # Perform delete sweep. This also modifies the state object.
     deleted_count = await perform_delete_sweep(state)
     if deleted_count > 0:
-        save_state_atomic(state, generation)
+        state_was_modified = True
         log.info(f"Scheduler: Performed delete sweep, {deleted_count} messages processed.")
     else:
         log.info("Scheduler: Delete sweep found no messages to process.")
 
-    # Digest publication twice a day
+    # Digest publication twice a day. This function loads its own state but that's okay
+    # as it's a separate, self-contained action. We pass the state to it for consistency.
     if now_utc.hour in [10, 20]: # Digest publication hours
         log.info(f"Scheduler: It's a digest hour ({now_utc.hour}:00 UTC). Publishing digest.")
-        await publish_digest_async()
+        # This function will save the state internally after clearing the digest list.
+        await publish_digest_async(state, generation)
+        state_was_modified = True # Assume digest publication modifies state
     else:
         log.info("Scheduler: Not a digest hour. Skipping digest.")
     
+    # --- FINAL STATE SAVE ---
+    # Save the state once at the end if any of the above functions modified it.
+    if state_was_modified:
+        try:
+            log.info("Changes were made during the run. Saving final state.")
+            save_state_atomic(state, generation)
+        except Exception as e:
+            log.critical(f"FINAL STATE SAVE FAILED at end of master_scheduler: {e}")
+    else:
+        log.info("No changes to state were made during this run. Skipping final save.")
+
     log.info("Master scheduler run finished.")
     return "Scheduler run complete."
 

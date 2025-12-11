@@ -242,16 +242,44 @@ async def perform_delete_sweep(state: Dict[str, Any]) -> int:
     
     return total_processed
 
-def prune_sent_links(state: Dict[str, Any]):
-    """Removes old links from the state to prevent it from growing indefinitely."""
+def prune_sent_links(state: Dict[str, Any]) -> int:
+    """
+    Removes old links from the state to prevent it from growing indefinitely.
+    Returns the number of links that were pruned.
+    """
     if config.DEDUP_TTL_HOURS <= 0:
-        return
+        return 0
+        
     prune_before = datetime.now(timezone.utc) - timedelta(hours=config.DEDUP_TTL_HOURS)
     original_count = len(state["sent_links"])
-    try:
-        pruned_links = {link: ts for link, ts in state["sent_links"].items() if datetime.fromisoformat(ts) >= prune_before}
-        if len(pruned_links) < original_count:
-            log.info(f"Pruned {original_count - len(pruned_links)} old links from state.")
-            state["sent_links"] = pruned_links
-    except (ValueError, TypeError) as e:
-        log.warning(f"Could not prune links due to a malformed timestamp. Error: {e}")
+    pruned_count = 0
+    
+    # This function needs to handle both old (str) and new (dict) state formats for graceful migration.
+    
+    def is_link_stale(value) -> bool:
+        timestamp_str = None
+        if isinstance(value, str):
+            timestamp_str = value
+        elif isinstance(value, dict) and 'timestamp' in value:
+            timestamp_str = value['timestamp']
+        
+        if timestamp_str:
+            try:
+                return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')) < prune_before
+            except (ValueError, TypeError):
+                return True # Prune malformed entries
+        return True # Prune entries that don't match expected format
+
+    links_to_keep = {
+        key: value
+        for key, value in state["sent_links"].items()
+        if not is_link_stale(value)
+    }
+
+    pruned_count = original_count - len(links_to_keep)
+
+    if pruned_count > 0:
+        log.info(f"Pruned {pruned_count} old links from state.")
+        state["sent_links"] = links_to_keep
+        
+    return pruned_count
