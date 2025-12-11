@@ -74,6 +74,7 @@ async def run_full_perplexity_audit(title: str, price: str, link: str) -> Dict[s
         return {'verdict': 'SKIPPED', 'telegram_message': 'Perplexity API key not configured.'}
 
     system_prompt = """Jesteś zaawansowanym, bezwzględnym audytorem ofert turystycznych. Twoim celem jest ekstrakcja danych i weryfikacja prawdy w jednym kroku.
+Wszystkie zwracane pola tekstowe, a zwłaszcza "telegram_message", MUSZĄ być w języku polskim.
 ZABRANIA SIĘ ZGADYWANIA. Lepiej zwrócić puste pole, niż zmyślić fakt.
 
 ZADANIE 1: GŁĘBOKA EKSTRAKCJA DANYCH
@@ -99,7 +100,7 @@ WYMAGANY FORMAT (Czysty JSON, bez markdowna, bez komentarza):
   "meal_plan": "Wyżywienie (np. All Inclusive)",
   "internal_log": "TU MUSISZ PODAĆ DOWÓD: Źródło + Data + Fakt z dochodzenia (np. 'TripAdvisor 12.2025: Goście skarżą się na wiercenie'). Bez dowodu nie ma werdyktu.",
   "verdict": "GEM (Okazja) / FAIR (Uczciwa) / RISK (Mina)",
-  "telegram_message": "JEŚLI RISK -> wpisz 'NULL'. JEŚLI GEM/FAIR -> Gotowa wiadomość (max 2 zdania, fakty, bezpieczny język)."
+  "telegram_message": "JEŚLI RISK -> wpisz 'NULL'. JEŚLI GEM/FAIR -> Gotowa wiadomość po polsku (max 2 zdania, fakty, bezpieczny język)."
 }
 
 ZASADY DECYZYJNE:
