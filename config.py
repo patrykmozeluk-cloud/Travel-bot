@@ -25,6 +25,7 @@ BUCKET_NAME = env("BUCKET_NAME")
 SENT_LINKS_FILE = env("SENT_LINKS_FILE", "sent_links.json")
 TELEGRAM_SECRET = env("TELEGRAM_SECRET")
 PORT = env("PORT", "8080")
+PROXY_URL = env("PROXY_URL")
 
 # ---------- RUN BEHAVIOR PARAMS ----------
 HTTP_TIMEOUT = float(env("HTTP_TIMEOUT", "15.0"))

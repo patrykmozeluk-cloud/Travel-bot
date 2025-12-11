@@ -1,6 +1,8 @@
 # OSTATECZNA WERSJA - POPRAWIONA
 FROM python:3.11
 
+# Force rebuild to ensure latest code is deployed (added 2025-12-11)
+
 # 1. Ustawienia środowiska
 ENV PYTHONUNBUFFERED True
 ENV PORT 8080

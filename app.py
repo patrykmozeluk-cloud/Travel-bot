@@ -97,30 +97,49 @@ async def process_and_publish_offers():
             log.warning(f"AI result for {original_candidate['title']} has no category. Skipping.")
             continue
             
-        # Add to sent_links regardless of category to prevent reprocessing
-        state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+        # Enrich the sent_links state with more context
+        state["sent_links"][original_candidate['dedup_key']] = {
+            "timestamp": now_utc_iso,
+            "category": category,
+            "score": score
+        }
 
         if score == 10 and category == "PUSH":
-            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'SZTOS' (Score 10). Sending immediately.")
-            message = f"🔥 **SZTOS ALERT!** 🔥\n\n*{ai_result.get('title')}*\n\nCena: *{ai_result.get('price')}*"
+            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'SZTOS' candidate (Score 10). Running Perplexity audit for verification.")
             
-            if config.TELEGRAM_CHANNEL_ID:
-                message_id = await send_telegram_message_async(
-                    message_content=message,
-                    link=original_candidate['link'],
-                    chat_id=config.TELEGRAM_CHANNEL_ID
-                )
-                if message_id:
-                    remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id)
-            
-            if config.TELEGRAM_CHAT_GROUP_ID:
-                message_id_group = await send_telegram_message_async(
-                    message_content=message,
-                    link=original_candidate['link'],
-                    chat_id=config.TELEGRAM_CHAT_GROUP_ID
-                )
-                if message_id_group:
-                    remember_for_deletion(state, config.TELEGRAM_CHAT_GROUP_ID, message_id_group)
+            offer_price = original_candidate.get('price') or ai_result.get('price', 'Brak ceny')
+            audit_result = await run_full_perplexity_audit(
+                title=ai_result.get('title'),
+                price=offer_price,
+                link=original_candidate['link']
+            )
+            verdict = audit_result.get("verdict")
+
+            if verdict in ["GEM", "FAIR"]:
+                log.info(f"Perplexity audit VERIFIED Sztos offer with verdict '{verdict}'. Sending immediately.")
+                
+                # Use enriched data from Perplexity for the message
+                message = f"🔥 **SZTOS ALERT!** 🔥\n\n{audit_result.get('telegram_message', ai_result.get('title'))}"
+                
+                if config.TELEGRAM_CHANNEL_ID:
+                    message_id = await send_telegram_message_async(
+                        message_content=message,
+                        link=original_candidate['link'],
+                        chat_id=config.TELEGRAM_CHANNEL_ID
+                    )
+                    if message_id:
+                        remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, original_candidate['source_url'])
+                
+                if config.TELEGRAM_CHAT_GROUP_ID:
+                    message_id_group = await send_telegram_message_async(
+                        message_content=message,
+                        link=original_candidate['link'],
+                        chat_id=config.TELEGRAM_CHAT_GROUP_ID
+                    )
+                    if message_id_group:
+                        remember_for_deletion(state, config.TELEGRAM_CHAT_GROUP_ID, message_id_group, original_candidate['source_url'])
+            else:
+                log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending.")
 
         elif score and score >= 7 and category == "DIGEST":
             log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'DIGEST' candidate (Score: {score}). Running Perplexity audit.")
@@ -133,9 +152,7 @@ async def process_and_publish_offers():
             )
             verdict = audit_result.get("verdict")
 
-            if verdict in ["ERROR", "SKIPPED", "RISK"] or audit_result.get("telegram_message") == "NULL":
-                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' returned '{verdict}'. Not adding to digest.")
-            else:
+            if verdict in ["GEM", "FAIR"]:
                 log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' with verdict '{verdict}'. Adding to digest.")
                 existing_keys = {c.get('dedup_key') for c in state.get("digest_candidates", [])}
                 if original_candidate['dedup_key'] not in existing_keys:
@@ -143,6 +160,8 @@ async def process_and_publish_offers():
                     state["digest_candidates"].append(candidate_to_add)
                 else:
                     log.info(f"Offer '{ai_result.get('title', 'N/A')}' already in digest candidates. Skipping add.")
+            else:
+                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' returned '{verdict}'. Not adding to digest.")
         else:
             log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}' (Score: {score}). Skipping publication.")
 

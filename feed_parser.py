@@ -30,6 +30,14 @@ def fetch_secretflying_feed_nuclear():
         'Referer': 'https://www.google.com/'
     }
 
+    # Add proxy configuration
+    proxies = {}
+    if config.PROXY_URL:
+        # curl_cffi expects a dictionary for proxies, with keys 'http' and 'https'
+        # pointing to the proxy URL (which can be socks5://)
+        proxies = {"http": config.PROXY_URL, "https": config.PROXY_URL} 
+        log.info(f"Using proxy for SecretFlying: {config.PROXY_URL.split('@')[-1]}") # Log without credentials
+
     try:
         log.info(f"🚀 Launching curl_cffi nuclear option on: {url}")
         
@@ -38,11 +46,12 @@ def fetch_secretflying_feed_nuclear():
             url, 
             impersonate="chrome124", 
             headers=headers, 
-            timeout=30
+            timeout=30,
+            proxies=proxies # Pass the proxies here
         )
         
         if response.status_code == 200:
-            log.info("✅ SUCCESS! SecretFlying feed has been breached.")
+            log.info("✅ SUCCESS! SecretFlying feed has been breached via proxy.")
             return response.text
         elif response.status_code == 403:
             log.error("❌ Still 403 Forbidden. Cloudflare is likely blocking the Google Cloud IP range.")
