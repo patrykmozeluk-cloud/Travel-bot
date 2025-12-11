@@ -12,3 +12,4 @@ grpcio>=1.62.0
 feedparser
 cloudscraper
 requests
+curl_cffi==0.7.3

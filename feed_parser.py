@@ -4,8 +4,7 @@ import asyncio
 import random
 import feedparser
 import httpx
-import cloudscraper
-import requests
+from curl_cffi import requests as cffi_requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from typing import List, Tuple, Dict
@@ -15,20 +14,45 @@ from utils import make_async_client
 
 log = logging.getLogger(__name__)
 
-# --- Cloudscraper Helper ---
-def fetch_with_cloudscraper(url: str) -> bytes | None:
+# --- Nuclear Option for SecretFlying ---
+def fetch_secretflying_feed_nuclear():
     """
-    Synchronous function to fetch a URL using cloudscraper.
-    This should be run in a thread to avoid blocking asyncio.
+    Uses curl_cffi to impersonate a real browser's TLS fingerprint to bypass
+    Cloudflare's "Super Bot Fight Mode" for the SecretFlying feed.
     """
+    url = "https://www.secretflying.com/feed/"
+    
+    # These headers are crafted to mimic a real Chrome browser on macOS
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.google.com/'
+    }
+
     try:
-        scraper = cloudscraper.create_scraper()
-        r = scraper.get(url, timeout=config.HTTP_TIMEOUT)
-        r.raise_for_status()
-        log.info(f"Successfully fetched with cloudscraper: {url}")
-        return r.content
+        log.info(f"🚀 Launching curl_cffi nuclear option on: {url}")
+        
+        # The impersonate="chrome124" parameter is the key to success.
+        response = cffi_requests.get(
+            url, 
+            impersonate="chrome124", 
+            headers=headers, 
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            log.info("✅ SUCCESS! SecretFlying feed has been breached.")
+            return response.text
+        elif response.status_code == 403:
+            log.error("❌ Still 403 Forbidden. Cloudflare is likely blocking the Google Cloud IP range.")
+            return None
+        else:
+            log.error(f"❌ An unexpected error occurred: {response.status_code}")
+            return None
+
     except Exception as e:
-        log.warning(f"Cloudscraper failed for {url}: {e}")
+        log.error(f"❌ A critical error occurred in curl_cffi: {e}", exc_info=True)
         return None
 
 # Concurrency & Rate Limiting Helpers
@@ -65,7 +89,7 @@ def get_sources(filename: str) -> List[str]:
         return []
 
 async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str, str, str]]:
-    """Fetches and parses a single RSS feed, using cloudscraper for specific domains."""
+    """Fetches and parses a single RSS feed, using curl_cffi for specific domains."""
     posts = []
     content = None
     try:
@@ -75,8 +99,8 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
             host = urlparse(url).netloc.lower()
             
             if config.SECRETFLYING_HOST in host:
-                log.info(f"Using cloudscraper for {url}")
-                content = await asyncio.to_thread(fetch_with_cloudscraper, url)
+                log.info(f"Using curl_cffi for {url}")
+                content = await asyncio.to_thread(fetch_secretflying_feed_nuclear)
             else:
                 r = await client.get(url, headers=build_headers(url))
                 if r.status_code == 200:
