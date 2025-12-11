@@ -129,15 +129,6 @@ async def process_and_publish_offers():
                     )
                     if message_id:
                         remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, original_candidate['source_url'])
-                
-                if config.TELEGRAM_CHAT_GROUP_ID:
-                    message_id_group = await send_telegram_message_async(
-                        message_content=message,
-                        link=original_candidate['link'],
-                        chat_id=config.TELEGRAM_CHAT_GROUP_ID
-                    )
-                    if message_id_group:
-                        remember_for_deletion(state, config.TELEGRAM_CHAT_GROUP_ID, message_id_group, original_candidate['source_url'])
             else:
                 log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending.")
 
