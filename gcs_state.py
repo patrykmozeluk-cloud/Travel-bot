@@ -252,29 +252,31 @@ def prune_sent_links(state: Dict[str, Any]) -> int:
         
     prune_before = datetime.now(timezone.utc) - timedelta(hours=config.DEDUP_TTL_HOURS)
     original_count = len(state["sent_links"])
-    pruned_count = 0
     
-    # This function needs to handle both old (str) and new (dict) state formats for graceful migration.
-    
-    def is_link_stale(value) -> bool:
+    links_to_keep = {}
+    for key, value in state["sent_links"].items():
         timestamp_str = None
+        
+        # Gracefully handle both old string format and new dictionary format
         if isinstance(value, str):
             timestamp_str = value
         elif isinstance(value, dict) and 'timestamp' in value:
             timestamp_str = value['timestamp']
-        
-        if timestamp_str:
-            try:
-                return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')) < prune_before
-            except (ValueError, TypeError):
-                return True # Prune malformed entries
-        return True # Prune entries that don't match expected format
 
-    links_to_keep = {
-        key: value
-        for key, value in state["sent_links"].items()
-        if not is_link_stale(value)
-    }
+        # If we have a timestamp string, try to parse it
+        if timestamp_str and isinstance(timestamp_str, str):
+            try:
+                # Check if the link is NOT stale
+                if datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')) >= prune_before:
+                    links_to_keep[key] = value
+                # If it is stale, we just don't add it to links_to_keep
+            except (ValueError, TypeError):
+                # If timestamp is malformed, treat as stale and do not keep
+                log.warning(f"Pruning malformed entry for key {key}. Value: {value}")
+                pass
+        else:
+            # If value is not a string or a valid dict, prune it
+            log.warning(f"Pruning entry with unexpected format for key {key}. Value: {value}")
 
     pruned_count = original_count - len(links_to_keep)
 
