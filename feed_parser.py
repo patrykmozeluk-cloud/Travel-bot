@@ -30,13 +30,14 @@ def fetch_secretflying_feed_nuclear():
         'Referer': 'https://www.google.com/'
     }
 
-    # Add proxy configuration
+    # Add proxy configuration using the new NORD_USER/NORD_PASS variables
     proxies = {}
-    if config.PROXY_URL:
-        # curl_cffi expects a dictionary for proxies, with keys 'http' and 'https'
-        # pointing to the proxy URL (which can be socks5://)
-        proxies = {"http": config.PROXY_URL, "https": config.PROXY_URL} 
-        log.info(f"Using proxy for SecretFlying: {config.PROXY_URL.split('@')[-1]}") # Log without credentials
+    if config.NORD_USER and config.NORD_PASS:
+        host = "amsterdam.nl.socks.nordhold.net"
+        port = 1080
+        proxy_url = f"socks5://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
+        proxies = {"http": proxy_url, "https": proxy_url} 
+        log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
 
     try:
         log.info(f"🚀 Launching curl_cffi nuclear option on: {url}")
