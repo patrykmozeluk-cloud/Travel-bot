@@ -131,20 +131,20 @@ async def publish_digest_async() -> str:
 
     # Log rejected offers before sorting
     for offer in unique_offers:
-        if offer.get('verdict') not in ["SUPER OKAZJA", "CENA RYNKOWA"]:
+        if offer.get('verdict') not in ["GEM", "FAIR"]:
             log.info(f"Offer '{offer.get('original_title', 'Unknown')}' rejected. Reason: Verdict is '{offer.get('verdict', 'N/A')}'.")
 
-    # Sort offers: 'SUPER OKAZJA' first, then 'CENA RYNKOWA', then alphabetically
+    # Sort offers: 'GEM' first, then 'FAIR', then alphabetically
     def sort_key(offer):
-        verdict_order = {"SUPER OKAZJA": 1, "CENA RYNKOWA": 2} 
+        verdict_order = {"GEM": 1, "FAIR": 2} 
         return (verdict_order.get(offer.get('verdict'), 99), offer.get('original_title', '').lower())
 
     sorted_offers = sorted(unique_offers, key=sort_key)
     
-    super_deals = [o for o in sorted_offers if o.get('verdict') == "SUPER OKAZJA"]
-    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "CENA RYNKOWA"]
+    super_deals = [o for o in sorted_offers if o.get('verdict') == "GEM"]
+    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "FAIR"]
 
-    log.info(f"Digest breakdown: {len(super_deals)} SUPER OKAZJA deals, {len(market_price_deals)} CENA RYNKOWA deals.")
+    log.info(f"Digest breakdown: {len(super_deals)} GEM deals, {len(market_price_deals)} FAIR deals.")
 
     telegraph = Telegraph(config.TELEGRAPH_TOKEN)
     
