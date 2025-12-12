@@ -81,12 +81,8 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
             log.warning(f"AI result for {original_candidate['title']} has no category. Skipping.")
             continue
             
-        # Enrich the sent_links state with more context
-        state["sent_links"][original_candidate['dedup_key']] = {
-            "timestamp": now_utc_iso,
-            "category": category,
-            "score": score
-        }
+        # Save the deduplication key to the sent_links state with a simple timestamp.
+        state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
         state_modified = True
 
         if score == 10 and category == "PUSH":
