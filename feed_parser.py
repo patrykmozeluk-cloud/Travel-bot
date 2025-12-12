@@ -35,7 +35,7 @@ def fetch_secretflying_feed_nuclear():
     if config.NORD_USER and config.NORD_PASS:
         host = "amsterdam.nl.socks.nordhold.net"
         port = 1080
-        proxy_url = f"socks5://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
+        proxy_url = f"socks5h://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
         proxies = {"http": proxy_url, "https": proxy_url} 
         log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
 
