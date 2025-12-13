@@ -46,6 +46,13 @@ AI_BATCH_WAIT_SECONDS = int(env("AI_BATCH_WAIT_SECONDS", "1"))
 
 # --- HOSTS ---
 SECRETFLYING_HOST = "secretflying.com"
+THRIFTY_TRAVELER_HOST = "thriftytraveler.com"
+
+# Define which hosts MUST use a proxy for scraping
+PROXY_REQUIRED_HOSTS = {
+    SECRETFLYING_HOST,
+    THRIFTY_TRAVELER_HOST
+}
 
 # --- URL CLEANING ---
 DROP_PARAMS: set = {
@@ -87,6 +94,13 @@ EMOJI_KEYWORDS: Dict[str, List[str]] = {
 }
 
 # --- HTTP & SCRAPING ---
+CHROME_USER_AGENTS: List[str] = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+]
+
 BASE_HEADERS: Dict[str, str] = {
     "Accept-Encoding": "gzip, deflate", 
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"

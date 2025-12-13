@@ -2,6 +2,7 @@
 import logging
 import asyncio
 import random
+import time
 import feedparser
 import httpx
 from curl_cffi import requests as cffi_requests
@@ -24,7 +25,7 @@ def fetch_secretflying_feed_nuclear():
     
     # These headers are crafted to mimic a real Chrome browser on macOS
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': random.choice(config.CHROME_USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://www.google.com/'
@@ -33,19 +34,22 @@ def fetch_secretflying_feed_nuclear():
     # Add proxy configuration using the new NORD_USER/NORD_PASS variables
     proxies = {}
     if config.NORD_USER and config.NORD_PASS:
-        host = "amsterdam.nl.socks.nordhold.net"
+        host = "socks-us29.nordvpn.com"
         port = 1080
         proxy_url = f"socks5h://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
         proxies = {"http": proxy_url, "https": proxy_url} 
         log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
 
     try:
+        # Add a random delay (jitter) to make the request timing less predictable
+        time.sleep(random.uniform(config.JITTER_MIN_MS / 1000.0, config.JITTER_MAX_MS / 1000.0))
+
         log.info(f"🚀 Launching curl_cffi nuclear option on: {url}")
         
-        # The impersonate="chrome124" parameter is the key to success.
+        # The impersonate parameter is the key to success. Try a different profile.
         response = cffi_requests.get(
             url, 
-            impersonate="chrome124", 
+            impersonate="chrome120", 
             headers=headers, 
             timeout=30,
             proxies=proxies # Pass the proxies here
@@ -55,7 +59,8 @@ def fetch_secretflying_feed_nuclear():
             log.info("✅ SUCCESS! SecretFlying feed has been breached via proxy.")
             return response.text
         elif response.status_code == 403:
-            log.error("❌ Still 403 Forbidden. Cloudflare is likely blocking the Google Cloud IP range.")
+            log.error("❌ Access Denied (403 Forbidden). This is likely an anti-bot measure.")
+            log.error(f"Response body on 403: {response.text[:500]}") # Log response body for diagnosis
             return None
         else:
             log.error(f"❌ An unexpected error occurred: {response.status_code}")
@@ -81,7 +86,7 @@ def build_headers(url: str) -> Dict[str, str]:
     host = urlparse(url).netloc.lower().replace("www.", "")
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml;q=0.8,*/*;q=0.8",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(config.CHROME_USER_AGENTS),
     }
     # Allow for domain-specific overrides
     domain_headers = config.DOMAIN_CONFIG.get(host, {}).get("headers")
@@ -136,6 +141,7 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
     """Scrapes a short description from a given URL."""
     try:
         async with _sem_for(url):
+            await _jitter() # Add jitter to scraping requests
             r = await client.get(url, headers=build_headers(url))
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
@@ -160,6 +166,7 @@ async def process_all_sources() -> List[Dict[str, any]]:
     """
     Fetches all RSS feeds, identifies new posts, and enriches them with descriptions.
     Returns a list of detailed candidates for AI analysis.
+    This version uses conditional proxying: some domains go through a proxy, others go direct.
     """
     from gcs_state import load_state # Defer import to avoid circular dependency issues at startup
 
@@ -170,40 +177,64 @@ async def process_all_sources() -> List[Dict[str, any]]:
         return []
 
     log.info(f"Loaded {len(rss_sources)} RSS feed(s) to process.")
+    
     all_posts = []
-    async with make_async_client() as client:
-        tasks = [fetch_feed(client, url) for url in rss_sources]
+    direct_client_config = {
+        "timeout": config.HTTP_TIMEOUT,
+        "follow_redirects": True,
+        "http2": True # Can be enabled for direct connections
+    }
+
+    # Create two clients: one with proxy, one without.
+    async with make_async_client() as proxied_client, httpx.AsyncClient(**direct_client_config) as direct_client:
+        
+        # --- 1. Fetch all RSS feeds ---
+        tasks = []
+        for url in rss_sources:
+            host = urlparse(url).netloc.lower()
+            use_proxy = any(proxy_host in host for proxy_host in config.PROXY_REQUIRED_HOSTS)
+            client_to_use = proxied_client if use_proxy else direct_client
+            if use_proxy:
+                log.info(f"Routing feed fetch for {host} via proxy.")
+            tasks.append(fetch_feed(client_to_use, url))
+        
         results = await asyncio.gather(*tasks)
         for post_list in results:
             if post_list:
                 all_posts.extend(post_list)
-    
-    log.info(f"Total posts collected from all RSS feeds: {len(all_posts)}")
-    
-    # Filter out already seen posts
-    seen_guids = set(state.get("sent_links", {}).keys())
-    new_posts = []
-    for title, link, guid, source_url in all_posts:
-        if guid not in seen_guids:
-            new_posts.append((title, link, guid, source_url))
 
-    if config.MAX_POSTS_PER_RUN > 0:
-        new_posts = new_posts[:config.MAX_POSTS_PER_RUN]
+        log.info(f"Total posts collected from all RSS feeds: {len(all_posts)}")
 
-    if not new_posts:
-        log.info("No new posts to process after checking against sent links database.")
-        return []
-        
-    log.info(f"Found {len(new_posts)} new candidates to process. Scraping descriptions...")
+        # --- 2. Filter out already seen posts ---
+        seen_guids = set(state.get("sent_links", {}).keys())
+        new_posts = []
+        for title, link, guid, source_url in all_posts:
+            if guid not in seen_guids:
+                new_posts.append((title, link, guid, source_url))
 
-    # Enrich new posts with descriptions
-    detailed_candidates = []
-    async with make_async_client() as client:
+        if config.MAX_POSTS_PER_RUN > 0:
+            new_posts = new_posts[:config.MAX_POSTS_PER_RUN]
+
+        if not new_posts:
+            log.info("No new posts to process after checking against sent links database.")
+            return []
+            
+        log.info(f"Found {len(new_posts)} new candidates to process. Scraping descriptions...")
+
+        # --- 3. Enrich new posts with descriptions ---
+        detailed_candidates = []
         for i, (title, link, dedup_key, source_url) in enumerate(new_posts):
             host = urlparse(link).netloc.lower().replace("www.", "")
             description = None
+            
+            # SecretFlying descriptions are usually not useful or non-existent
             if host != config.SECRETFLYING_HOST:
-                description = await scrape_description(client, link)
+                # Decide which client to use for scraping the article link
+                use_proxy = any(proxy_host in host for proxy_host in config.PROXY_REQUIRED_HOSTS)
+                client_to_use = proxied_client if use_proxy else direct_client
+                if use_proxy:
+                    log.info(f"Routing description scrape for {host} via proxy.")
+                description = await scrape_description(client_to_use, link)
             
             detailed_candidates.append({
                 "id": i,

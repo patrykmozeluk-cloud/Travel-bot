@@ -14,7 +14,7 @@ def make_async_client() -> httpx.AsyncClient:
     """
     transport = None
     if config.NORD_USER and config.NORD_PASS:
-        host = "amsterdam.nl.socks.nordhold.net"
+        host = "socks-us29.nordvpn.com"
         port = 1080
         proxy_url = f"socks5://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
         transport = AsyncProxyTransport.from_url(proxy_url)

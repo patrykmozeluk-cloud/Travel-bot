@@ -96,8 +96,8 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
             )
             verdict = audit_result.get("verdict")
 
-            if verdict in ["GEM", "FAIR"]:
-                log.info(f"Perplexity audit VERIFIED Sztos offer with verdict '{verdict}'. Sending immediately.")
+            if verdict == "GEM":
+                log.info(f"Perplexity audit VERIFIED Sztos offer with verdict 'GEM'. Sending immediately.")
                 
                 message = f"🔥 **SZTOS ALERT!** 🔥\n\n{audit_result.get('telegram_message', ai_result.get('title'))}"
                 
@@ -110,8 +110,20 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
                     if message_id:
                         remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, original_candidate['source_url'])
                         state_modified = True
+            
+            elif verdict == "FAIR":
+                log.info(f"Sztos offer was downgraded to 'FAIR' by Perplexity. Adding to digest instead of instant publish.")
+                existing_keys = {c.get('dedup_key') for c in state.get("digest_candidates", [])}
+                if original_candidate['dedup_key'] not in existing_keys:
+                    candidate_to_add = {**original_candidate, **audit_result, 'ai_score': score}
+                    state["digest_candidates"].append(candidate_to_add)
+                    state_modified = True
+                    log.info(f"Downgraded sztos '{ai_result.get('title', 'N/A')}' added to digest.")
+                else:
+                    log.info(f"Downgraded sztos '{ai_result.get('title', 'N/A')}' was already in digest. Skipping.")
+
             else:
-                log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending.")
+                log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending or adding to digest.")
 
         elif score and score >= 7 and category == "DIGEST":
             log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'DIGEST' candidate (Score: {score}). Running Perplexity audit.")

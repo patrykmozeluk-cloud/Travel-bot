@@ -63,35 +63,62 @@ async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: st
     return None
 
 async def send_telegram_message_async(message_content: str, link: str, chat_id: str) -> int | None:
-    """Sends a standard offer message in Markdown with a button."""
+    """Sends a standard offer message, with a fallback from Markdown to plain text."""
+    
+    # Payload with Markdown
+    payload = {
+        "chat_id": chat_id,
+        "text": message_content,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+        "reply_markup": {
+            "inline_keyboard": [[{"text": "👉 SPRAWDŹ OFERTĘ", "url": link}]]
+        }
+    }
+    
+    url = f"https://api.telegram.org/bot{config.TG_TOKEN}/sendMessage"
+    
     async with make_async_client() as client:
         try:
-            payload = {
-                "chat_id": chat_id,
-                "text": message_content,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": True,
-                "reply_markup": {
-                    "inline_keyboard": [[{"text": "👉 SPRAWDŹ OFERTĘ", "url": link}]]
-                }
-            }
-            
-            url = f"https://api.telegram.org/bot{config.TG_TOKEN}/sendMessage"
-            
+            # --- First Attempt: Send with Markdown ---
             r = await client.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
-            r.raise_for_status()
+            
+            # Check for "can't parse entities" specifically, which returns a 400
+            if r.status_code == 400 and "can't parse entities" in r.text:
+                # This is a predictable error, raise a specific exception to trigger the fallback
+                raise ValueError("Markdown parse error, requires fallback.")
+            
+            r.raise_for_status() # Raise for other HTTP errors (e.g., 500)
+            
             body = r.json()
-
             if body.get("ok"):
                 log.info(f"Message sent (Markdown): {message_content[:60]}…")
                 return body.get("result", {}).get("message_id")
             else:
-                log.error(f"Telegram returned ok=false: {body}")
-                if body.get("description") and "can't parse entities" in body["description"]:
-                    log.warning(f"MARKDOWN PARSE ERROR. Offending text was: \n---\n{message_content}\n---")
+                # If ok=false but it wasn't a 400 parse error, log it and fail.
+                log.error(f"Telegram returned ok=false (Markdown): {body}")
+                return None
 
         except Exception as e:
-            log.error(f"Telegram send error for {link}: {e}", exc_info=True)
+            log.warning(f"Failed to send with Markdown ('{e}'). Retrying as plain text.")
+            
+            # --- Second Attempt: Send as Plain Text ---
+            try:
+                # Remove parse_mode for plain text
+                payload.pop("parse_mode", None)
+                
+                r_fallback = await client.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
+                r_fallback.raise_for_status()
+                
+                body_fallback = r_fallback.json()
+                if body_fallback.get("ok"):
+                    log.info(f"Message sent (Plain Text Fallback): {message_content[:60]}…")
+                    return body_fallback.get("result", {}).get("message_id")
+                else:
+                    log.error(f"Telegram returned ok=false on fallback: {body_fallback}")
+            except Exception as fallback_e:
+                log.error(f"Telegram fallback send error for {link}: {fallback_e}", exc_info=True)
+                
     return None
 
 
@@ -161,7 +188,12 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<h3>💎 Perełki Dnia (GEM) 💎</h3>"
         content_html += "<p><i>Te oferty to prawdziwe perełki, które szybko znikają!</i></p>"
         for offer in super_deals:
-            tekst = offer.get('telegram_message') or offer.get('analysis')
+            raw_msg = offer.get('telegram_message')
+            # Jeśli wiadomość to NULL lub pusta, użyj tytułu lub stwórz generyk
+            if not raw_msg or raw_msg == "NULL":
+                tekst = "Kliknij, aby sprawdzić szczegóły tej oferty!"
+            else:
+                tekst = raw_msg
             content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
@@ -172,7 +204,12 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<h3>✅ Dobre Okazje (FAIR) ✅</h3>"
         content_html += "<p><b>Dobre, solidne oferty, które warto rozważyć.</b></p><br/>"
         for offer in market_price_deals:
-            tekst = offer.get('telegram_message') or offer.get('analysis')
+            raw_msg = offer.get('telegram_message')
+            # Jeśli wiadomość to NULL lub pusta, użyj tytułu lub stwórz generyk
+            if not raw_msg or raw_msg == "NULL":
+                tekst = "Kliknij, aby sprawdzić szczegóły tej oferty!"
+            else:
+                tekst = raw_msg
             content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"

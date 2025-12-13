@@ -2,6 +2,7 @@ import logging
 import json
 import asyncio
 import re
+import random
 import httpx
 import google.generativeai as genai
 from typing import Dict, Any, List
@@ -67,46 +68,47 @@ async def gemini_api_call_with_retry(prompt_parts, max_retries=4):
 async def run_full_perplexity_audit(title: str, price: str, link: str) -> Dict[str, Any]:
     """
     Uses Perplexity API to perform a full audit of an offer, including deep data
-    extraction and verification, in a single call.
+    extraction and verification, in a single call. Includes a retry mechanism.
     """
     if not config.PERPLEXITY_API_KEY:
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
-        return {'verdict': 'SKIPPED', 'telegram_message': 'Perplexity API key not configured.'}
+        return {'verdict': 'SKIPPED', 'reason': 'Perplexity API key not configured.'}
 
-    system_prompt = """Jesteś zaawansowanym, bezwzględnym audytorem ofert turystycznych. Twoim celem jest ekstrakcja danych i weryfikacja prawdy w jednym kroku.
-Wszystkie zwracane pola tekstowe, a zwłaszcza "telegram_message", MUSZĄ być w języku polskim.
-ZABRANIA SIĘ ZGADYWANIA. Lepiej zwrócić puste pole, niż zmyślić fakt.
+    system_prompt = """### 🧠 ROLA: INTELIGENTNY CYNIK (SMART CYNIC)
+Jesteś doświadczonym łowcą okazji. Twoim celem jest przepuszczanie okazji, a nie ich blokowanie przez biurokrację.
 
-ZADANIE 1: GŁĘBOKA EKSTRAKCJA DANYCH
-Zanim ocenisz, MUSISZ wyciągnąć jak najwięcej danych z podanego URL. Przeskanuj metadane strony, jeśli dane nie są widoczne w tekście:
-1. Szukaj w strukturach JSON-LD lub Schema.org (obiekty 'Product', 'Hotel', 'Offer').
-2. Sprawdź tagi OpenGraph (og:title, og:description, og:price:amount).
-3. Sprawdź atrybuty 'alt' obrazków.
-Dane z metadanych traktuj jako pewne.
+### 🛡️ PROTOKÓŁ BEZPIECZEŃSTWA (ŚCISŁE NADPISANIA / OVERRIDES)
+Stosuj te reguły PRIORYTETOWO. Jeśli oferta spełnia warunek, ignoruj braki danych.
 
-ZADANIE 2: DOCHODZENIE DWUTOROWE (Live Search)
-Po ekstrakcji danych, zweryfikuj je:
-1. Ścieżka WAD (Szukaj miny): Sprawdź opinie o hotelu TYLKO z ostatnich 3-6 miesięcy. Szukaj słów: remont, brud, hałas, pluskwy, kradzież.
-2. Ścieżka OKAZJI (Szukaj złota): Porównaj wyekstrahowaną cenę z konkurencją (Booking, Google). Czy to realna okazja?
+**A. REGUŁA "ŁOWCA OKAZJI" (Low Cost Bypass) - NAJWAŻNIEJSZA!**
+JEŚLI całkowita cena oferty jest niska (np. < 700 PLN / 160 EUR za pakiet lub < 200 PLN za lot):
+- WERDYKT: Musi być 'GEM' lub 'FAIR'. NIGDY 'RISK'.
+- IGNORUJ: Brak nazwy hotelu, brak opinii, błędy w metadanych. Niska cena rekompensuje ryzyko.
+- UZASADNIENIE: "Cena poniżej progu ryzyka."
 
-WYMAGANY FORMAT (Czysty JSON, bez markdowna, bez komentarza):
+**B. REGUŁA "PRIORYTET LOTU" (Flight First)**
+JEŚLI oferta dotyczy lotu (lub tytuł sugeruje trasę np. "Zurych - Bogota") i cena jest świetna:
+- WERDYKT: 'GEM' lub 'FAIR'.
+- IGNORUJ: Status hotelu ("Unknown"/"Risk"). Ważny jest bilet.
+
+**C. REGUŁA "STANDARD ZAMIAST NAZWY"**
+JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
+- AKCJA: Porównaj cenę ze średnią rynkową dla 4*. Jeśli tanio -> WERDYKT 'GEM'/'FAIR'.
+
+### ✍️ INSTRUKCJE COPYWRITINGU (TRYB SPRZEDAWCY)
+1.  **ZAKAZ PISANIA O AUDYCIE:** Nie pisz "Zweryfikowano", "Brak danych", "Opinie nieznane".
+2.  **OBSŁUGA NO-NAME:** Jak nie znasz hotelu, pisz o standardzie: "Wypoczynek w standardzie 4*", "Słoneczny resort".
+3.  **NULL:** Wpisz "NULL" tylko i wyłącznie, jeśli werdykt to 'RISK'. Jeśli 'GEM' lub 'FAIR' – MUSISZ napisać atrakcyjną wiadomość.
+
+### WYMAGANY FORMAT JSON
 {
-  "hotel_name": "Pełna nazwa hotelu (pobrana z metadata jeśli trzeba)",
-  "standard": "Liczba gwiazdek (np. 5*)",
-  "location": "Kraj i Region",
-  "airline": "Nazwa przewoźnika",
-  "price_value": "Sama liczba",
+  "hotel_name": "Nazwa lub 'Hotel 4*'",
+  "price_value": "Liczba",
   "currency": "PLN/EUR/USD",
-  "meal_plan": "Wyżywienie (np. All Inclusive)",
-  "internal_log": "TU MUSISZ PODAĆ DOWÓD: Źródło + Data + Fakt z dochodzenia (np. 'TripAdvisor 12.2025: Goście skarżą się na wiercenie'). Bez dowodu nie ma werdyktu.",
-  "verdict": "GEM (Okazja) / FAIR (Uczciwa) / RISK (Mina)",
-  "telegram_message": "JEŚLI RISK -> wpisz 'NULL'. JEŚLI GEM/FAIR -> Gotowa wiadomość po polsku (max 2 zdania, fakty, bezpieczny język)."
-}
-
-ZASADY DECYZYJNE:
-1. STATUS RISK (Odpada): Jeśli znajdziesz wady krytyczne (remont, syf) LUB jeśli pola `hotel_name` lub `price_value` są puste po głębokiej ekstrakcji. Wtedy `telegram_message` MUSI być 'NULL'.
-2. STATUS GEM/FAIR (Publikujemy): Wiadomość musi być bezpieczna prawnie. Używaj: "W opiniach pojawiają się uwagi...", "Cena niższa o X zł...". Zacznij od emotikony: 🔥 dla GEM, ✅ dla FAIR.
-"""
+  "internal_log": "Krótko: dlaczego GEM/RISK? Czy użyto reguły A/B/C?",
+  "verdict": "GEM", "FAIR" lub "RISK",
+  "telegram_message": "Gotowy post na Telegram (emotki, zachęta). Jeśli RISK -> 'NULL'."
+}"""
     user_prompt = f"Przeprowadź pełny audyt oferty: Tytuł: '{title}', Cena: '{price}', Link: {link}"
 
     payload = {
@@ -136,7 +138,7 @@ ZASADY DECYZYJNE:
                         "verdict": {"type": "string", "enum": ["GEM", "FAIR", "RISK"]},
                         "telegram_message": {"type": ["string", "null"]}
                     },
-                    "required": ["hotel_name", "standard", "location", "airline", "price_value", "currency", "meal_plan", "internal_log", "verdict", "telegram_message"]
+                    "required": ["verdict", "telegram_message", "price_value", "currency", "internal_log"]
                 }
             }
         }
@@ -147,26 +149,71 @@ ZASADY DECYZYJNE:
         "authorization": f"Bearer {config.PERPLEXITY_API_KEY}"
     }
 
-    try:
-        async with make_async_client() as client:
-            response = await client.post("https://api.perplexity.ai/chat/completions", json=payload, headers=headers, timeout=120.0)
-            response.raise_for_status()
-            response_json = response.json()
-            raw_content = response_json['choices'][0]['message']['content']
-            audit_result = json.loads(raw_content)
+    max_retries = 3
+    response = None
+    raw_text = None
 
-            if 'telegram_message' in audit_result and isinstance(audit_result['telegram_message'], str):
-                audit_result['telegram_message'] = re.sub(r'\[\d+\]', '', audit_result['telegram_message']).strip()
+    for attempt in range(max_retries):
+        try:
+            async with make_async_client() as client:
+                response = await client.post("https://api.perplexity.ai/chat/completions", json=payload, headers=headers, timeout=120.0)
+                response.raise_for_status()
 
-            log.info(f"Perplexity full audit for '{title[:30]}...' successful. Verdict: {audit_result.get('verdict')}")
-            return audit_result
+                content_type = response.headers.get("content-type", "")
+                if "application/json" not in content_type:
+                    raise ValueError(f"INVALID_CONTENT_TYPE: Expected application/json, got {content_type}")
 
-    except httpx.HTTPStatusError as e:
-        log.error(f"Perplexity API returned status {e.response.status_code}: {e.response.text}", exc_info=True)
-        return {'verdict': 'ERROR', 'telegram_message': f'API call failed: {e.response.text}'}
-    except Exception as e:
-        log.error(f"Perplexity API full audit failed for '{title[:30]}...'. Error: {e}", exc_info=True)
-        return {'verdict': 'ERROR', 'telegram_message': f'API call failed: {e}'}
+                raw_text = response.text
+                if not raw_text.strip():
+                    raise ValueError("EMPTY_RESPONSE: The API returned an empty response body.")
+
+                data = response.json()
+                
+                content = data.get('choices', [{}])[0].get('message', {}).get('content')
+                if not content or not content.strip():
+                    raise ValueError("EMPTY_MESSAGE_CONTENT: The AI model returned no content inside the message.")
+                
+                audit_result = json.loads(content)
+
+                if 'telegram_message' in audit_result and isinstance(audit_result['telegram_message'], str):
+                    audit_result['telegram_message'] = re.sub(r'\[\d+\]', '', audit_result['telegram_message']).strip()
+
+                verdict = audit_result.get('verdict')
+                log.info(f"Perplexity full audit for '{title[:30]}...' successful. Verdict: {verdict}")
+                
+                if verdict == 'RISK':
+                    reason = audit_result.get('internal_log', 'No reason provided')
+                    log.info(f"Perplexity Reason for RISK: {reason}")
+
+                return audit_result
+
+        except json.JSONDecodeError as e:
+            log.error(
+                "JSONDecodeError during Perplexity audit | Status: %s | Headers: %s | Body Snippet: %r",
+                response.status_code if response else 'N/A',
+                response.headers if response else 'N/A',
+                raw_text[:500] if raw_text else 'N/A',
+                exc_info=True
+            )
+            # Retry once for JSON errors, as it might be a transient model issue
+            if attempt >= 1: 
+                return {"verdict": "ERROR", "reason": f"JSONDecodeError after retries: {e}", "source": "perplexity_api"}
+
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
+            log.warning(f"Perplexity audit attempt {attempt + 1}/{max_retries} failed for '{title[:30]}...'. Error: {e}")
+            if attempt >= max_retries - 1:
+                log.error(f"Perplexity audit failed after {max_retries} attempts. Final error: {e}", exc_info=True)
+                return {"verdict": "ERROR", "reason": f"API call failed after retries: {e}", "source": "perplexity_api"}
+
+        except Exception as e:
+            log.error(f"An unexpected error occurred during Perplexity audit for '{title[:30]}...'. Error: {e}", exc_info=True)
+            return {"verdict": "ERROR", "reason": f"An unexpected error occurred: {e}", "source": "perplexity_api"}
+
+        # Exponential backoff + jitter
+        delay = 0.5 * (2 ** attempt) + random.uniform(0, 0.3)
+        await asyncio.sleep(delay)
+    
+    return {"verdict": "ERROR", "reason": "API call failed after all retries.", "source": "perplexity_api"}
 
 
 async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
