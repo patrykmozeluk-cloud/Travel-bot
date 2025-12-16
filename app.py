@@ -68,26 +68,23 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
     # --- New Audit-Then-Route Logic ---
 
     # 1. Identify all high-value candidates for Perplexity audit
-    # ZMIANA: Dodano warunek conviction >= 7.
-    # Jeśli Gemini daje 9/10, ale conviction ma 4/10 (bo zgaduje), to NIE wysyłamy do audytu.
     perplexity_candidates = [
         r for r in all_ai_results
         if r.get('score') and int(r.get('score', 0)) >= 9
-        and int(r.get('conviction', 10)) >= 7  # Domyślnie 10 jeśli brak pola, dla bezpieczeństwa
+        and int(r.get('conviction', 10)) >= 7
     ]
-
-    # Sort perplexity_candidates by ai_score (descending) to prioritize higher-scoring Sztos alerts
-    perplexity_candidates.sort(key=lambda x: int(x.get('score', 0)), reverse=True)
-
     log.info(f"Found {len(perplexity_candidates)} candidates (Score >= 9 & Conviction >= 7) requiring Perplexity audit.")
-    # 2. Process each candidate through Perplexity and then route it
+
+    # 2. Audit all candidates and collect GEMs and FAIRs
+    gem_offers = []
+    fair_offers = []
+
     for candidate in perplexity_candidates:
         original_candidate = candidates_by_id.get(candidate.get("id"))
         if not original_candidate:
             log.warning(f"Orphaned AI result with ID {candidate.get('id')}. Skipping.")
             continue
         
-        # Always mark as processed to prevent re-analysis in future runs
         state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
         state_modified = True
         
@@ -99,83 +96,75 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
             link=original_candidate['link']
         )
         
-        # Combine all data into one object for easier handling
-        full_offer_details = {
-            **original_candidate, 
-            **candidate, 
-            **audit_result, 
-            'ai_score': candidate.get('score')
-        }
+        full_offer_details = {**original_candidate, **candidate, **audit_result, 'ai_score': candidate.get('score')}
 
-        # Skip any offers rejected by Perplexity
-        if full_offer_details.get("verdict") not in ["GEM", "FAIR"]:
+        if full_offer_details.get("verdict") == "GEM":
+            gem_offers.append(full_offer_details)
+        elif full_offer_details.get("verdict") == "FAIR":
+            fair_offers.append(full_offer_details)
+        else:
             log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
-            continue
 
-        # --- Routing Logic (Post-Audit) ---
+    # 3. Decide on the 'Sztos Alert' from the collected GEMs
+    today_str = now_utc.date().isoformat()
+    if state.get('last_sztos_alert_date') != today_str:
+        log.info("New day detected. Resetting daily 'Sztos Alert' time slots.")
+        state['sztos_slots_used_today'] = []
+        state['last_sztos_alert_date'] = today_str
+        state_modified = True
 
-        # Reset daily "Sztos" time slots if it's a new day
-        today_str = now_utc.date().isoformat()
-        if state.get('last_sztos_alert_date') != today_str:
-            log.info(f"New day detected. Resetting daily 'Sztos Alert' time slots.")
-            state['sztos_slots_used_today'] = []
-            state['last_sztos_alert_date'] = today_str
-            state_modified = True
+    current_hour = now_utc.hour
+    time_slot = "morning" if 0 <= current_hour < 12 else "afternoon" if 12 <= current_hour < 18 else "evening"
+    slot_is_available = time_slot not in state.get('sztos_slots_used_today', [])
 
-        # Determine current time slot
-        current_hour = now_utc.hour
-        if 0 <= current_hour < 12:
-            time_slot = "morning"
-        elif 12 <= current_hour < 18:
-            time_slot = "afternoon"
-        else:
-            time_slot = "evening"
+    offers_for_digest = fair_offers
+    
+    # Separate GEMs by origin continent
+    european_gems = [offer for offer in gem_offers if offer.get('origin_continent') == 'Europa']
+    non_european_gems = [offer for offer in gem_offers if offer.get('origin_continent') != 'Europa']
+    
+    sztos_published = False
+    if european_gems and slot_is_available:
+        # Sort European GEMs by the new sztos_score from Perplexity
+        european_gems.sort(key=lambda x: int(x.get('sztos_score', 0)), reverse=True)
+        
+        best_european_gem = european_gems[0] # The highest-scored European GEM
+        
+        log.info(f"POST-AUDIT: Best European GEM offer '{best_european_gem.get('title')}' (Sztos Score: {best_european_gem.get('sztos_score')}) is a 'SZTOS ALERT' for the '{time_slot}' slot. Publishing immediately.")
+        message = f"🔥 **SZTOS ALERT!** 🔥\n\n{best_european_gem.get('telegram_message', best_european_gem.get('title'))}"
+        
+        if config.TELEGRAM_CHANNEL_ID:
+            message_id = await send_telegram_message_async(message_content=message, link=best_european_gem['link'], chat_id=config.TELEGRAM_CHANNEL_ID)
+            if message_id:
+                remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, best_european_gem['source_url'])
+                state.setdefault('sztos_slots_used_today', []).append(time_slot)
+                state_modified = True
+                sztos_published = True
+                log.info(f"Sztos Alert slot '{time_slot}' used. Used slots today: {state['sztos_slots_used_today']}")
+        
+        # The rest of the European GEMs go to the digest
+        offers_for_digest.extend(european_gems[1:])
+    elif not european_gems:
+         log.info("No European GEM offers found in this batch. All GEMs will be routed to digest.")
+    elif not slot_is_available:
+        log.info(f"A 'Sztos Alert' for the '{time_slot}' slot has already been published today. Routing all European GEMs to digest.")
+        offers_for_digest.extend(european_gems)
 
-        # Check conditions for a "Sztos Alert"
-        is_sztos_material = int(full_offer_details.get('ai_score', 0)) >= 9
-        is_from_europe = full_offer_details.get('continent') == 'Europa'
-        slot_is_available = time_slot not in state.get('sztos_slots_used_today', [])
+    # All non-European GEMs always go to the digest
+    offers_for_digest.extend(non_european_gems)
 
-        if is_sztos_material and is_from_europe and slot_is_available:
-            log.info(f"POST-AUDIT: Offer '{candidate.get('title')}' is a 'SZTOS ALERT' for the '{time_slot}' slot. Publishing immediately.")
-            message = f"🔥 **SZTOS ALERT!** 🔥\n\n{full_offer_details.get('telegram_message', candidate.get('title'))}"
-            
-            if config.TELEGRAM_CHANNEL_ID:
-                message_id = await send_telegram_message_async(message_content=message, link=full_offer_details['link'], chat_id=config.TELEGRAM_CHANNEL_ID)
-                if message_id:
-                    remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, full_offer_details['source_url'])
-                    # Mark the slot as used
-                    state.setdefault('sztos_slots_used_today', []).append(time_slot)
-                    state_modified = True
-                    log.info(f"Sztos Alert slot '{time_slot}' used. Used slots today: {state['sztos_slots_used_today']}")
-        else:
-            # If not a Sztos Alert, it's a digest candidate
-            log.info(f"POST-AUDIT: Offer '{candidate.get('title')}' is a DIGEST candidate. Routing to queue.")
-            
-            # Determine target queue based on time of day
-            if 10 <= now_utc.hour < 20: # 10:00-19:59 UTC is for the evening digest
-                target_queue_name = 'evening_digest_queue'
-            else: # All other times (e.g., 20:00-09:59 UTC) are for the morning digest
-                target_queue_name = 'morning_digest_queue'
-            
-            log.info(f"Adding to '{target_queue_name}'.")
-            
-            # Add to the queue if it's not already there
-            existing_keys = {c.get('dedup_key') for c in state[target_queue_name]}
-            if full_offer_details['dedup_key'] not in existing_keys:
-                state[target_queue_name].append(full_offer_details)
-
-                # Pruning logic: if queue is over-sized, sort and trim
-                # if len(state[target_queue_name]) > config.MAX_DIGEST_SIZE:
-                #     log.info(f"'{target_queue_name}' exceeds max size ({config.MAX_DIGEST_SIZE}). Pruning...")
-                #     # Sort by score (desc) to keep the best ones
-                #     state[target_queue_name].sort(key=lambda x: int(x.get('ai_score', 0)), reverse=True)
-                #     state[target_queue_name] = state[target_queue_name][:config.MAX_DIGEST_SIZE]
-                #     log.info(f"Pruning complete. New size: {len(state[target_queue_name])}.")
-
+    # 4. Route all other offers to the digest queue
+    if offers_for_digest:
+        log.info(f"Routing {len(offers_for_digest)} offers to the digest queue.")
+        target_queue_name = 'evening_digest_queue' if 10 <= now_utc.hour < 20 else 'morning_digest_queue'
+        
+        for offer in offers_for_digest:
+            existing_keys = {c.get('dedup_key') for c in state.get(target_queue_name, [])}
+            if offer['dedup_key'] not in existing_keys:
+                state.setdefault(target_queue_name, []).append(offer)
                 state_modified = True
             else:
-                log.info(f"Offer '{candidate.get('title')}' already in '{target_queue_name}'. Skipping add.")
+                log.info(f"Offer '{offer.get('title')}' already in '{target_queue_name}'. Skipping add.")
 
     # Mark all other (low-score) offers as seen
     low_score_offers = [r for r in all_ai_results if r.get('score') and int(r.get('score', 0)) < 9]

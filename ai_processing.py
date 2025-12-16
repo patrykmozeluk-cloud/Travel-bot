@@ -109,6 +109,7 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
   "currency": "PLN/EUR/USD",
   "internal_log": "Krótko: dlaczego GEM/RISK? Czy użyto reguły A/B/C?",
   "verdict": "GEM", "FAIR" lub "RISK",
+  "sztos_score": "Jeśli werdykt to 'GEM', oceń w skali 1-10 jak dobra jest to okazja. Jeśli inny werdykt, zwróć 0.",
   "telegram_message": "Gotowy post na Telegram (emotki, zachęta). Jeśli RISK -> 'NULL'."
 }"""
     user_prompt = f"Przeprowadź pełny audyt oferty: Tytuł: '{title}', Cena: '{price}', Link: {link}"
@@ -138,9 +139,10 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
                         "meal_plan": {"type": "string"},
                         "internal_log": {"type": "string"},
                         "verdict": {"type": "string", "enum": ["GEM", "FAIR", "RISK"]},
+                        "sztos_score": {"type": "integer", "minimum": 0, "maximum": 10},
                         "telegram_message": {"type": ["string", "null"]}
                     },
-                    "required": ["verdict", "telegram_message", "price_value", "currency", "internal_log"]
+                    "required": ["verdict", "telegram_message", "price_value", "currency", "internal_log", "sztos_score"]
                 }
             }
         }
@@ -243,14 +245,14 @@ NOWA SKALA OCEN (SCORE):
 KATEGORIE I WYMAGANE DANE W ODPOWIEDZI:
 
 1.  **KATEGORIA "PUSH" (Ocena 9-10)**:
-    -   Zwróć: `id`, `link`, `title`, `price`, `score`, `conviction` (NOWE!), `category` ("PUSH"), `continent`.
+    -   Zwróć: `id`, `link`, `title`, `price`, `score`, `conviction` (NOWE!), `category` ("PUSH"), `continent` (destination), `origin_continent`.
 
 2.  **KATEGORIA "IGNORE" (Ocena 1-8)**:
     -   Zwróć: `id`, `category` ("IGNORE"). Reszta opcjonalna.
 
 FORMAT WYJŚCIOWY (CZYSTY JSON):
 [
-  { "id": 0, "link": "...", "title": "...", "price": "999 PLN", "score": 9, "conviction": 8, "category": "PUSH", "continent": "Europa" },
+  { "id": 0, "link": "...", "title": "...", "price": "999 PLN", "score": 9, "conviction": 8, "category": "PUSH", "continent": "Azja", "origin_continent": "Europa" },
   { "id": 1, "category": "IGNORE" }
 ]"""
     
