@@ -40,7 +40,10 @@ def _default_state() -> Dict[str, Any]:
         "sent_links": {},
         "delete_queue": [],
         "last_ai_analysis_time": "1970-01-01T00:00:00Z",
-        "digest_candidates": [],
+        "morning_digest_queue": [],
+        "evening_digest_queue": [],
+        "sztos_alerts_today": 0,
+        "last_sztos_alert_date": "1970-01-01",
     }
 
 def _ensure_state_shapes(state: Dict[str, Any]):

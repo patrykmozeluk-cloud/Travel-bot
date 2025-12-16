@@ -60,95 +60,131 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
         pruned_count = prune_sent_links(state)
         return pruned_count > 0
 
-    # 3. Process AI Results and Distribute Content ("Sztos vs Reszta")
+    # 3. Process AI Results and Distribute Content (Audit-Then-Route Logic)
     candidates_by_id = {c['id']: c for c in detailed_candidates}
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc)
+    now_utc_iso = now_utc.isoformat()
     
-    for ai_result in all_ai_results:
-        result_id = ai_result.get("id")
-        if result_id is None:
-            log.warning(f"AI result with no ID found: {ai_result}. Skipping.")
-            continue
+    # --- New Audit-Then-Route Logic ---
 
-        original_candidate = candidates_by_id.get(result_id)
+    # 1. Identify all high-value candidates for Perplexity audit
+    # ZMIANA: Dodano warunek conviction >= 7.
+    # Jeśli Gemini daje 9/10, ale conviction ma 4/10 (bo zgaduje), to NIE wysyłamy do audytu.
+    perplexity_candidates = [
+        r for r in all_ai_results
+        if r.get('score') and int(r.get('score', 0)) >= 9
+        and int(r.get('conviction', 10)) >= 7  # Domyślnie 10 jeśli brak pola, dla bezpieczeństwa
+    ]
+
+    # Sort perplexity_candidates by ai_score (descending) to prioritize higher-scoring Sztos alerts
+    perplexity_candidates.sort(key=lambda x: int(x.get('score', 0)), reverse=True)
+
+    log.info(f"Found {len(perplexity_candidates)} candidates (Score >= 9 & Conviction >= 7) requiring Perplexity audit.")
+    # 2. Process each candidate through Perplexity and then route it
+    for candidate in perplexity_candidates:
+        original_candidate = candidates_by_id.get(candidate.get("id"))
         if not original_candidate:
-            log.warning(f"AI returned a result with ID {result_id} that does not match any original candidate. Skipping.")
+            log.warning(f"Orphaned AI result with ID {candidate.get('id')}. Skipping.")
             continue
-            
-        category = ai_result.get("category")
-        score = ai_result.get("score")
-        if not category:
-            log.warning(f"AI result for {original_candidate['title']} has no category. Skipping.")
-            continue
-            
-        # Save the deduplication key to the sent_links state with a simple timestamp.
+        
+        # Always mark as processed to prevent re-analysis in future runs
         state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
         state_modified = True
+        
+        log.info(f"Running Perplexity audit for '{candidate.get('title')}' (Score: {candidate.get('score')}).")
+        offer_price = original_candidate.get('price') or candidate.get('price', 'Brak ceny')
+        audit_result = await run_full_perplexity_audit(
+            title=candidate.get('title'),
+            price=offer_price,
+            link=original_candidate['link']
+        )
+        
+        # Combine all data into one object for easier handling
+        full_offer_details = {
+            **original_candidate, 
+            **candidate, 
+            **audit_result, 
+            'ai_score': candidate.get('score')
+        }
 
-        if score == 10 and category == "PUSH":
-            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'SZTOS' candidate (Score 10). Running Perplexity audit for verification.")
-            
-            offer_price = original_candidate.get('price') or ai_result.get('price', 'Brak ceny')
-            audit_result = await run_full_perplexity_audit(
-                title=ai_result.get('title'),
-                price=offer_price,
-                link=original_candidate['link']
-            )
-            verdict = audit_result.get("verdict")
+        # Skip any offers rejected by Perplexity
+        if full_offer_details.get("verdict") not in ["GEM", "FAIR"]:
+            log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
+            continue
 
-            if verdict == "GEM":
-                log.info(f"Perplexity audit VERIFIED Sztos offer with verdict 'GEM'. Sending immediately.")
-                
-                message = f"🔥 **SZTOS ALERT!** 🔥\n\n{audit_result.get('telegram_message', ai_result.get('title'))}"
-                
-                if config.TELEGRAM_CHANNEL_ID:
-                    message_id = await send_telegram_message_async(
-                        message_content=message,
-                        link=original_candidate['link'],
-                        chat_id=config.TELEGRAM_CHANNEL_ID
-                    )
-                    if message_id:
-                        remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, original_candidate['source_url'])
-                        state_modified = True
-            
-            elif verdict == "FAIR":
-                log.info(f"Sztos offer was downgraded to 'FAIR' by Perplexity. Adding to digest instead of instant publish.")
-                existing_keys = {c.get('dedup_key') for c in state.get("digest_candidates", [])}
-                if original_candidate['dedup_key'] not in existing_keys:
-                    candidate_to_add = {**original_candidate, **audit_result, 'ai_score': score}
-                    state["digest_candidates"].append(candidate_to_add)
-                    state_modified = True
-                    log.info(f"Downgraded sztos '{ai_result.get('title', 'N/A')}' added to digest.")
-                else:
-                    log.info(f"Downgraded sztos '{ai_result.get('title', 'N/A')}' was already in digest. Skipping.")
+        # --- Routing Logic (Post-Audit) ---
 
-            else:
-                log.warning(f"Perplexity audit REJECTED Sztos offer. Verdict: '{verdict}'. Not sending or adding to digest.")
+        # Reset daily "Sztos" time slots if it's a new day
+        today_str = now_utc.date().isoformat()
+        if state.get('last_sztos_alert_date') != today_str:
+            log.info(f"New day detected. Resetting daily 'Sztos Alert' time slots.")
+            state['sztos_slots_used_today'] = []
+            state['last_sztos_alert_date'] = today_str
+            state_modified = True
 
-        elif score and score >= 7 and category == "DIGEST":
-            log.info(f"Offer '{ai_result.get('title', 'N/A')}' is a 'DIGEST' candidate (Score: {score}). Running Perplexity audit.")
-            offer_price = original_candidate.get('price') or ai_result.get('price', 'Brak ceny')
-            
-            audit_result = await run_full_perplexity_audit(
-                title=ai_result.get('title'),
-                price=offer_price,
-                link=original_candidate['link']
-            )
-            verdict = audit_result.get("verdict")
-
-            if verdict in ["GEM", "FAIR"]:
-                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' with verdict '{verdict}'. Adding to digest.")
-                existing_keys = {c.get('dedup_key') for c in state.get("digest_candidates", [])}
-                if original_candidate['dedup_key'] not in existing_keys:
-                    candidate_to_add = {**original_candidate, **audit_result, 'ai_score': score}
-                    state["digest_candidates"].append(candidate_to_add)
-                    state_modified = True
-                else:
-                    log.info(f"Offer '{ai_result.get('title', 'N/A')}' already in digest candidates. Skipping add.")
-            else:
-                log.info(f"Perplexity audit for '{ai_result.get('title', 'N/A')}' returned '{verdict}'. Not adding to digest.")
+        # Determine current time slot
+        current_hour = now_utc.hour
+        if 0 <= current_hour < 12:
+            time_slot = "morning"
+        elif 12 <= current_hour < 18:
+            time_slot = "afternoon"
         else:
-            log.info(f"Offer '{original_candidate['title'][:40]}...' is '{category}' (Score: {score}). Skipping publication.")
+            time_slot = "evening"
+
+        # Check conditions for a "Sztos Alert"
+        is_sztos_material = int(full_offer_details.get('ai_score', 0)) >= 9
+        is_from_europe = full_offer_details.get('continent') == 'Europa'
+        slot_is_available = time_slot not in state.get('sztos_slots_used_today', [])
+
+        if is_sztos_material and is_from_europe and slot_is_available:
+            log.info(f"POST-AUDIT: Offer '{candidate.get('title')}' is a 'SZTOS ALERT' for the '{time_slot}' slot. Publishing immediately.")
+            message = f"🔥 **SZTOS ALERT!** 🔥\n\n{full_offer_details.get('telegram_message', candidate.get('title'))}"
+            
+            if config.TELEGRAM_CHANNEL_ID:
+                message_id = await send_telegram_message_async(message_content=message, link=full_offer_details['link'], chat_id=config.TELEGRAM_CHANNEL_ID)
+                if message_id:
+                    remember_for_deletion(state, config.TELEGRAM_CHANNEL_ID, message_id, full_offer_details['source_url'])
+                    # Mark the slot as used
+                    state.setdefault('sztos_slots_used_today', []).append(time_slot)
+                    state_modified = True
+                    log.info(f"Sztos Alert slot '{time_slot}' used. Used slots today: {state['sztos_slots_used_today']}")
+        else:
+            # If not a Sztos Alert, it's a digest candidate
+            log.info(f"POST-AUDIT: Offer '{candidate.get('title')}' is a DIGEST candidate. Routing to queue.")
+            
+            # Determine target queue based on time of day
+            if 10 <= now_utc.hour < 20: # 10:00-19:59 UTC is for the evening digest
+                target_queue_name = 'evening_digest_queue'
+            else: # All other times (e.g., 20:00-09:59 UTC) are for the morning digest
+                target_queue_name = 'morning_digest_queue'
+            
+            log.info(f"Adding to '{target_queue_name}'.")
+            
+            # Add to the queue if it's not already there
+            existing_keys = {c.get('dedup_key') for c in state[target_queue_name]}
+            if full_offer_details['dedup_key'] not in existing_keys:
+                state[target_queue_name].append(full_offer_details)
+
+                # Pruning logic: if queue is over-sized, sort and trim
+                # if len(state[target_queue_name]) > config.MAX_DIGEST_SIZE:
+                #     log.info(f"'{target_queue_name}' exceeds max size ({config.MAX_DIGEST_SIZE}). Pruning...")
+                #     # Sort by score (desc) to keep the best ones
+                #     state[target_queue_name].sort(key=lambda x: int(x.get('ai_score', 0)), reverse=True)
+                #     state[target_queue_name] = state[target_queue_name][:config.MAX_DIGEST_SIZE]
+                #     log.info(f"Pruning complete. New size: {len(state[target_queue_name])}.")
+
+                state_modified = True
+            else:
+                log.info(f"Offer '{candidate.get('title')}' already in '{target_queue_name}'. Skipping add.")
+
+    # Mark all other (low-score) offers as seen
+    low_score_offers = [r for r in all_ai_results if r.get('score') and int(r.get('score', 0)) < 9]
+    for offer in low_score_offers:
+        original_candidate = candidates_by_id.get(offer.get("id"))
+        if original_candidate and original_candidate['dedup_key'] not in state["sent_links"]:
+           state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+           state_modified = True
+           log.info(f"Marking low-score offer '{original_candidate.get('title')[:30]}...' as seen.")
 
     log.info("Processing complete.")
     pruned_count = prune_sent_links(state)
@@ -191,13 +227,15 @@ async def master_scheduler():
     else:
         log.info("Scheduler: Delete sweep found no messages to process.")
 
-    # Digest publication twice a day. This function loads its own state but that's okay
-    # as it's a separate, self-contained action. We pass the state to it for consistency.
-    if now_utc.hour in [10, 20]: # Digest publication hours
-        log.info(f"Scheduler: It's a digest hour ({now_utc.hour}:00 UTC). Publishing digest.")
-        # This function will save the state internally after clearing the digest list.
-        await publish_digest_async(state, generation)
-        state_was_modified = True # Assume digest publication modifies state
+    # Digest publication twice a day.
+    if now_utc.hour == 10: # Morning digest publication hour
+        log.info(f"Scheduler: It's a digest hour ({now_utc.hour}:00 UTC). Publishing morning digest.")
+        await publish_digest_async(state, generation, 'morning_digest_queue')
+        state_was_modified = True
+    elif now_utc.hour == 20: # Evening digest publication hour
+        log.info(f"Scheduler: It's a digest hour ({now_utc.hour}:00 UTC). Publishing evening digest.")
+        await publish_digest_async(state, generation, 'evening_digest_queue')
+        state_was_modified = True
     else:
         log.info("Scheduler: Not a digest hour. Skipping digest.")
     

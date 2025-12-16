@@ -122,13 +122,16 @@ async def send_telegram_message_async(message_content: str, link: str, chat_id: 
     return None
 
 
-async def publish_digest_async(state: Dict[str, Any] | None = None, generation: int | None = None) -> str:
+async def publish_digest_async(state: Dict[str, Any] | None = None, generation: int | None = None, queue_name: str | None = None) -> str:
     """
     Generates and publishes the digest of top offers to Telegraph and posts a link to Telegram.
-    If state and generation are not provided, it loads them.
+    Processes a specific queue ('morning_digest_queue' or 'evening_digest_queue').
     """
-    log.info("Starting digest generation...")
+    log.info(f"Starting digest generation for queue: '{queue_name}'...")
     
+    if not queue_name:
+        return "Error: No digest queue name provided for publication."
+
     # If state is not passed, load it. This supports manual runs.
     if state is None or generation is None:
         log.info("State not provided, loading from GCS for a standalone run.")
@@ -138,94 +141,60 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         log.error("TELEGRAPH_TOKEN is not configured. Cannot publish digest.")
         return "Error: Telegraph token not configured."
 
-    digest_candidates = state.get("digest_candidates", [])
+    digest_candidates = state.get(queue_name, [])
 
     if not digest_candidates:
-        log.info("Digest candidates list is empty. Skipping digest generation.")
-        return "Digest candidates list is empty, no digest to generate."
+        log.info(f"Digest queue '{queue_name}' is empty. Skipping digest generation.")
+        return f"Digest queue '{queue_name}' is empty, no digest to generate."
 
-    # Filter out malformed candidates from previous failed runs
-    valid_candidates = [
-        c for c in digest_candidates 
-        if c.get('verdict') and c.get('dedup_key')
-    ]
-    if len(valid_candidates) < len(digest_candidates):
-        log.warning(f"Filtered out {len(digest_candidates) - len(valid_candidates)} malformed digest candidates.")
-    
-    if not valid_candidates:
-        log.warning("No valid digest candidates found after filtering. Clearing list and skipping.")
-        state["digest_candidates"] = []
-        save_state_atomic(state, generation)
-        return "No valid digest candidates to publish."
-
-    # Remove duplicates, keeping the latest one
-    unique_offers_dict = {offer['dedup_key']: offer for offer in valid_candidates}
-    unique_offers = list(unique_offers_dict.values())
-    log.info(f"Found {len(unique_offers)} unique, valid offers for the digest.")
-
-    # Log rejected offers before sorting
-    for offer in unique_offers:
-        if offer.get('verdict') not in ["GEM", "FAIR"]:
-            log.info(f"Offer '{offer.get('original_title', 'Unknown')}' rejected. Reason: Verdict is '{offer.get('verdict', 'N/A')}'.")
-
-    # Sort offers: 'GEM' first, then 'FAIR', then alphabetically
+    # Sort offers: ai_score highest first, then alphabetically
     def sort_key(offer):
-        verdict_order = {"GEM": 1, "FAIR": 2} 
-        return (verdict_order.get(offer.get('verdict'), 99), offer.get('original_title', '').lower())
+        # Prioritize ai_score (10 > 9), then alphabetical by title
+        return (-int(offer.get('ai_score', 0)), offer.get('original_title', '').lower())
 
-    sorted_offers = sorted(unique_offers, key=sort_key)
+    sorted_offers = sorted(digest_candidates, key=sort_key)
     
-    super_deals = [o for o in sorted_offers if o.get('verdict') == "GEM"]
-    market_price_deals = [o for o in sorted_offers if o.get('verdict') == "FAIR"]
+    diamond_deals = [o for o in sorted_offers if int(o.get('ai_score', 0)) == 10]
+    good_deals = [o for o in sorted_offers if int(o.get('ai_score', 0)) == 9]
 
-    log.info(f"Digest breakdown: {len(super_deals)} GEM deals, {len(market_price_deals)} FAIR deals.")
+    log.info(f"Digest breakdown for '{queue_name}': {len(diamond_deals)} DIAMOND (AI Score 10) deals, {len(good_deals)} GOOD (AI Score 9) deals.")
 
     telegraph = Telegraph(config.TELEGRAPH_TOKEN)
     
     content_html = ""
 
-    if super_deals:
-        content_html += "<h3>💎 Perełki Dnia (GEM) 💎</h3>"
-        content_html += "<p><i>Te oferty to prawdziwe perełki, które szybko znikają!</i></p>"
-        for offer in super_deals:
-            raw_msg = offer.get('telegram_message')
-            # Jeśli wiadomość to NULL lub pusta, użyj tytułu lub stwórz generyk
-            if not raw_msg or raw_msg == "NULL":
-                tekst = "Kliknij, aby sprawdzić szczegóły tej oferty!"
-            else:
-                tekst = raw_msg
-            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
-            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
+    if diamond_deals:
+        content_html += "<h3>💎 Perełki Dnia (AI Score 10) 💎</h3>"
+        content_html += "<p><i>To są absolutne HITY, zweryfikowane przez naszą AI i audyt Perplexity. Nie przegap!</i></p>"
+        for offer in diamond_deals:
+            tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej wyjątkowej oferty!")
+            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>"
+            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
-    if market_price_deals:
-        content_html += "<h3>✅ Dobre Okazje (FAIR) ✅</h3>"
-        content_html += "<p><b>Dobre, solidne oferty, które warto rozważyć.</b></p><br/>"
-        for offer in market_price_deals:
-            raw_msg = offer.get('telegram_message')
-            # Jeśli wiadomość to NULL lub pusta, użyj tytułu lub stwórz generyk
-            if not raw_msg or raw_msg == "NULL":
-                tekst = "Kliknij, aby sprawdzić szczegóły tej oferty!"
-            else:
-                tekst = raw_msg
-            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>" # Use new hotel_name
-            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>" # Use new price fields
+    if good_deals:
+        content_html += "<h3>🌟 Dobre Okazje (AI Score 9) 🌟</h3>"
+        content_html += "<p><b>Solidne oferty po audycie Perplexity, które zasługują na Twoją uwagę.</b></p><br/>"
+        for offer in good_deals:
+            tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej dobrej okazji!")
+            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>"
+            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
     
     # Fallback in case there are no deals to show
     if not content_html:
-        log.warning("No deals to publish after filtering. Clearing candidates and skipping.")
-        state["digest_candidates"] = []
+        log.warning(f"No deals to publish from '{queue_name}' after filtering. Clearing queue and skipping.")
+        state[queue_name] = []
         save_state_atomic(state, generation)
-        return "No deals to publish."
+        return f"No deals to publish from '{queue_name}'."
 
     try:
         current_time = datetime.now()
-        if 10 <= current_time.hour < 15:
+        if queue_name == 'morning_digest_queue':
             digest_title = f"Poranny Przegląd Ofert ({current_time.strftime('%d-%m-%Y')})"
         else:
             digest_title = f"Popołudniowy Przegląd Ofert ({current_time.strftime('%d-%m-%Y')})"
@@ -236,7 +205,7 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
             author_name="Travel Bot",
         )
         page_url = response['url']
-        log.info(f"Successfully created Telegra.ph page: {page_url}")
+        log.info(f"Successfully created Telegra.ph page for '{queue_name}': {page_url}")
 
         engaging_caption = "🔥 <b>GORĄCA SELEKCJA OFERT CZEKA!</b> 🔥\n\nSprawdź nasze najnowsze, zweryfikowane okazje. Niektóre z nich to prawdziwe perełki!\n\n<i>Kliknij poniżej, aby zobaczyć pełny przegląd!</i>"
         digest_button_text = "👉 Zobacz Pełen Przegląd!"
@@ -252,12 +221,12 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
                 button_url=page_url
             )
 
-        state["digest_candidates"] = []
+        state[queue_name] = []
         save_state_atomic(state, generation)
-        log.info("Digest published and candidates list has been cleared.")
+        log.info(f"Digest for '{queue_name}' published and queue has been cleared.")
         
-        return f"Digest published successfully: {page_url}"
+        return f"Digest for '{queue_name}' published successfully: {page_url}"
 
     except Exception as e:
-        log.error(f"Failed to create or publish Telegra.ph page: {e}", exc_info=True)
+        log.error(f"Failed to create or publish Telegra.ph page for '{queue_name}': {e}", exc_info=True)
         return "Error during digest publication."

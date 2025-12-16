@@ -96,7 +96,7 @@ EMOJI_KEYWORDS: Dict[str, List[str]] = {
 # --- HTTP & SCRAPING ---
 CHROME_USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 ]
@@ -142,3 +142,4 @@ DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
 }
 
 GENERIC_FALLBACK_SELECTORS: List[str] = ['article h2 a', 'article h3 a', 'h2 a', 'h3 a']
+# MAX_DIGEST_SIZE = 15

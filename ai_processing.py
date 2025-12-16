@@ -99,6 +99,8 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
 1.  **ZAKAZ PISANIA O AUDYCIE:** Nie pisz "Zweryfikowano", "Brak danych", "Opinie nieznane".
 2.  **OBSŁUGA NO-NAME:** Jak nie znasz hotelu, pisz o standardzie: "Wypoczynek w standardzie 4*", "Słoneczny resort".
 3.  **NULL:** Wpisz "NULL" tylko i wyłącznie, jeśli werdykt to 'RISK'. Jeśli 'GEM' lub 'FAIR' – MUSISZ napisać atrakcyjną wiadomość.
+4.  **ZAKAZ TAGÓW**: Nigdy nie dodawaj hashtagów (#tagi) ani innych form tagowania. Są one zbędne.
+5.  **ZAKAZ BEZPOŚREDNICH LINKÓW**: Nigdy nie umieszczaj bezpośrednich URL-i do ofert w wiadomości. Linki są obsługiwane oddzielnie przez przycisk.
 
 ### WYMAGANY FORMAT JSON
 {
@@ -226,35 +228,30 @@ async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]
 Analizuj oferty w ich oryginalnym języku (głównie angielski), ale Twoja odpowiedź i wszystkie dane tekstowe MUSZĄ być w języku polskim.
 
 NAJWAŻNIEJSZE ZASADY:
-1.  **ZERO ZGADYWANA**: Nie zgaduj nazwy linii lotniczej, hotelu ani innych detali. Jeśli informacja nie jest jawnie podana, pomiń ją. Lepiej zwrócić mniej danych niż nieprawdziwe.
-2.  **ID OBOWIĄZKOWE**: W Twojej odpowiedzi, KAŻDY obiekt MUSI zawierać oryginalne `id` z obiektu wejściowego.
-3.  **MERYTORYKA > CLICKBAIT**: Tytuły chwytliwe oceniaj ostrożnie. Skup się na faktycznej wartości oferty (cena, zawartość linku), a nie na krzykliwym tytule.
+1.  **ZERO ZGADYWANA**: Nie zgaduj nazwy linii lotniczej, hotelu ani innych detali. Jeśli informacja nie jest jawnie podana, pomiń ją.
+2.  **MERYTORYKA > CLICKBAIT**: Oceniaj faktyczną wartość (cena vs rynkowa), a nie krzykliwy tytuł.
+3.  **GEOLOKACJA**: Zawsze zwracaj kontynent, z którego pochodzi oferta (np. 'Europa', 'Ameryka Północna', 'Azja'). Jeśli to niemożliwe, zwróć 'Global' lub 'Unknown'.
+4.  **CONVICTION (PEWNOŚĆ)**: Oceń w skali 1-10 swoją pewność co do tej oceny.
+    - Jeśli oferta ma mało danych, ale wygląda tanio -> Score wysoki, ale Conviction niski (np. 4).
+    - Jeśli oferta ma pełne dane i jasną cenę -> Conviction wysoki (np. 9-10).
 
-NOWA SKALA OCEN I AKCJE:
-- **10/10 (SZTOS / BŁĄD CENOWY)**: Absolutny hit. Oferta tak dobra, że prawdopodobnie jest to błąd cenowy lub historyczne minimum. Wymaga natychmiastowej publikacji.
-- **9/10 (GEM / PEREŁKA)**: Wyjątkowo dobra oferta, znacznie poniżej standardów rynkowych. Idealny kandydat do przeglądu ofert (digest).
-- **7-8/10 (FAIR / SOLIDNA OFERTA)**: Dobra, solidna promocja. Cena jest niższa niż zwykle, warta uwagi. Kandydat do przeglądu ofert (digest).
-- **1-6/10 (IGNORE / IGNORUJ)**: Cena rynkowa, standardowa, zawyżona lub po prostu spam. Oferta niewarta uwagi.
+NOWA SKALA OCEN (SCORE):
+- **10/10 (SZTOS)**: Błąd cenowy lub historyczne minimum.
+- **9/10 (GEM)**: Wyjątkowa okazja.
+- **1-8/10 (IGNORE)**: Standardowa cena lub spam.
 
 KATEGORIE I WYMAGANE DANE W ODPOWIEDZI:
 
-1.  **KATEGORIA "PUSH" (Ocena 10)**:
-    -   Akcja: Musisz zwrócić PEŁNE dane: `id`, `link`, `title`, `price`, `score` (czyli 10) i `category` ("PUSH").
+1.  **KATEGORIA "PUSH" (Ocena 9-10)**:
+    -   Zwróć: `id`, `link`, `title`, `price`, `score`, `conviction` (NOWE!), `category` ("PUSH"), `continent`.
 
-2.  **KATEGORIA "DIGEST" (Ocena 7-9)**:
-    -   Akcja: Musisz zwrócić PEŁNE dane: `id`, `link`, `title`, `price`, `score` (w zakresie 7-9) i `category` ("DIGEST").
-
-3.  **KATEGORIA "IGNORE" (Ocena 1-6)**:
-    -   Akcja: Wystarczy, że zwrócisz `id`, `link`, `category` ("IGNORE") i `score`.
+2.  **KATEGORIA "IGNORE" (Ocena 1-8)**:
+    -   Zwróć: `id`, `category` ("IGNORE"). Reszta opcjonalna.
 
 FORMAT WYJŚCIOWY (CZYSTY JSON):
-Zwróć TYLKO listę obiektów JSON, bez żadnych dodatkowych opisów, formatowania markdown czy komentarzy.
-
-Przykład:
 [
-  { "id": 0, "link": "url_do_sztosa", "title": "Tytuł sztosa", "price": "999 PLN", "score": 10, "category": "PUSH" },
-  { "id": 1, "link": "url_do_perelki", "title": "Tytuł perełki", "price": "2500 PLN", "score": 9, "category": "DIGEST" },
-  { "id": 2, "link": "url_do_slabej", "score": 4, "category": "IGNORE" }
+  { "id": 0, "link": "...", "title": "...", "price": "999 PLN", "score": 9, "conviction": 8, "category": "PUSH", "continent": "Europa" },
+  { "id": 1, "category": "IGNORE" }
 ]"""
     
     user_message = json.dumps(candidates, indent=2)
@@ -278,10 +275,8 @@ Przykład:
             log.error(f"Gemini API returned data that is not a list: {ai_results}")
             return []
         
-        # Add digest_timestamp for DIGEST items
-        for item in ai_results:
-            if item.get("category") == "DIGEST":
-                item["digest_timestamp"] = datetime.utcnow().isoformat() + "Z"
+        # (digest_timestamp logic removed as DIGEST category is deprecated)
+
         
         log.info(f"AI processed batch and returned {len(ai_results)} categorized results.")
         return ai_results
