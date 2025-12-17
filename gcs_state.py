@@ -42,7 +42,7 @@ def _default_state() -> Dict[str, Any]:
         "last_ai_analysis_time": "1970-01-01T00:00:00Z",
         "morning_digest_queue": [],
         "evening_digest_queue": [],
-        "sztos_alerts_today": 0,
+        "sztos_slots_used_today": [], # To track which time slots have been used for Sztos Alert today
         "last_sztos_alert_date": "1970-01-01",
     }
 
