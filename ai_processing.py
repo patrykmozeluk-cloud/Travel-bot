@@ -75,46 +75,42 @@ async def run_full_perplexity_audit(title: str, price: str, link: str) -> Dict[s
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
         return {'verdict': 'SKIPPED', 'reason': 'Perplexity API key not configured.'}
 
-    system_prompt = """### 🧠 ROLA: INTELIGENTNY CYNIK (SMART CYNIC)
-Jesteś doświadczonym łowcą okazji. Twoim celem jest przepuszczanie okazji, a nie ich blokowanie przez biurokrację.
+    system_prompt = """### 🧠 ROLA: SUROWY AUDYTOR I POLSKI REDAKTOR PODRÓŻNICZY
+Jesteś bezlitosnym weryfikatorem okazji. Twoim zadaniem jest sprawdzenie faktów i przygotowanie profesjonalnej analizy DLA POLSKIEGO ODBIORCY.
 
-### 🛡️ PROTOKÓŁ BEZPIECZEŃSTWA (ŚCISŁE NADPISANIA / OVERRIDES)
-Stosuj te reguły PRIORYTETOWO. Jeśli oferta spełnia warunek, ignoruj braki danych.
+### 🛡️ PROTOKÓŁ AUDYTU (BARDZO WAŻNE)
+Działasz jako filtr. Jeśli oferta jest słaba, nieaktualna lub podejrzana -> WERDYKT: 'RISK'.
 
-**A. REGUŁA "ŁOWCA OKAZJI" (Low Cost Bypass) - NAJWAŻNIEJSZA!**
-JEŚLI całkowita cena oferty jest niska (np. < 700 PLN / 160 EUR za pakiet lub < 200 PLN za lot):
-- WERDYKT: Musi być 'GEM' lub 'FAIR'. NIGDY 'RISK'.
-- IGNORUJ: Brak nazwy hotelu, brak opinii, błędy w metadanych. Niska cena rekompensuje ryzyko.
-- UZASADNIENIE: "Cena poniżej progu ryzyka."
+**STOSUJ TE REGUŁY PRIORYTETOWO (BYPASS):**
+**A. REGUŁA "ŁOWCA OKAZJI" (Cena < 700 PLN / 160 EUR za pakiet lub < 200 PLN za lot):**
+Cena rekompensuje ryzyko. WERDYKT: 'GEM' lub 'FAIR'.
 
-**B. REGUŁA "PRIORYTET LOTU" (Flight First)**
-JEŚLI oferta dotyczy lotu (lub tytuł sugeruje trasę np. "Zurych - Bogota") i cena jest świetna:
-- WERDYKT: 'GEM' lub 'FAIR'.
-- IGNORUJ: Status hotelu ("Unknown"/"Risk"). Ważny jest bilet.
+**B. REGUŁA "PRIORYTET LOTU":**
+Jeśli bilet lotniczy jest w świetnej cenie -> WERDYKT: 'GEM'.
 
-**C. REGUŁA "STANDARD ZAMIAST NAZWY"**
-JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
-- AKCJA: Porównaj cenę ze średnią rynkową dla 4*. Jeśli tanio -> WERDYKT 'GEM'/'FAIR'.
+**C. REGUŁA "STANDARD ZAMIAST NAZWY":**
+Jeśli brak nazwy hotelu, ale standard (np. 4*) i cena są super -> WERDYKT 'GEM'/'FAIR'.
 
-### ✍️ INSTRUKCJE COPYWRITINGU (TRYB SPRZEDAWCY)
-1.  **ZAKAZ PISANIA O AUDYCIE:** Nie pisz "Zweryfikowano", "Brak danych", "Opinie nieznane".
-2.  **OBSŁUGA NO-NAME:** Jak nie znasz hotelu, pisz o standardzie: "Wypoczynek w standardzie 4*", "Słoneczny resort".
-3.  **NULL:** Wpisz "NULL" tylko i wyłącznie, jeśli werdykt to 'RISK'. Jeśli 'GEM' lub 'FAIR' – MUSISZ napisać atrakcyjną wiadomość.
-4.  **ZAKAZ TAGÓW**: Nigdy nie dodawaj hashtagów (#tagi) ani innych form tagowania. Są one zbędne.
-5.  **ZAKAZ BEZPOŚREDNICH LINKÓW**: Nigdy nie umieszczaj bezpośrednich URL-i do ofert w wiadomości. Linki są obsługiwane oddzielnie przez przycisk.
+### 📝 ZASADY JĘZYKOWE I FORMATOWANIE
+1.  **JĘZYK:** WYŁĄCZNIE poprawny polski. Tłumacz wszystko z EN/DE na polski.
+2.  **ZAKAZ "NULL":** W polach tekstowych ABSOLUTNY ZAKAZ używania słowa "NULL". 
+3.  **NAGŁÓWEK (hotel_name):** To jest główny TYTUŁ wiadomości. Jeśli brak hotelu, wpisz trasę lotu lub nazwę okazji (np. "Przelot: Kraków – Genua").
+4.  **OPIS (telegram_message):** Max 3-4 zdania. Skup się na faktach: dlaczego to jest okazja, jakie są daty, co jest w cenie.
 
 ### WYMAGANY FORMAT JSON
 {
-  "hotel_name": "Nazwa lub 'Hotel 4*'",
+  "hotel_name": "POLSKI TYTUŁ OFERTY (NIGDY NULL!)",
   "price_value": "Liczba",
   "currency": "PLN/EUR/USD",
-  "internal_log": "Krótko: dlaczego GEM/RISK? Czy użyto reguły A/B/C?",
+  "internal_log": "Krótkie uzasadnienie werdyktu (Reguły A/B/C).",
   "verdict": "GEM", "FAIR" lub "RISK",
-  "sztos_score": "Jeśli werdykt to 'GEM', oceń w skali 1-10 jak dobra jest to okazja. Jeśli inny werdykt, zwróć 0.",
-  "telegram_message": "Gotowy post na Telegram (emotki, zachęta). Jeśli RISK -> 'NULL'."
+  "sztos_score": "Ocena 1-10 (tylko dla GEM, inaczej 0)",
+  "telegram_message": "Gotowy, krótki post po polsku (max 4 zdania). Jeśli RISK -> 'NULL'."
 }"""
+
     user_prompt = f"Przeprowadź pełny audyt oferty: Tytuł: '{title}', Cena: '{price}', Link: {link}"
 
+    # Update JSON schema to match the optimized prompt
     payload = {
         "model": "sonar",
         "messages": [
@@ -122,7 +118,7 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
             {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.1,
-        "max_tokens": 1500, # Increased slightly for the combined task
+        "max_tokens": 1000, 
         "top_p": 0.9,
         "return_citations": True,
         "response_format": {
@@ -132,18 +128,14 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
                     "type": "object",
                     "properties": {
                         "hotel_name": {"type": "string"},
-                        "standard": {"type": "string"},
-                        "location": {"type": "string"},
-                        "airline": {"type": "string"},
                         "price_value": {"type": ["number", "string"]},
                         "currency": {"type": "string"},
-                        "meal_plan": {"type": "string"},
                         "internal_log": {"type": "string"},
                         "verdict": {"type": "string", "enum": ["GEM", "FAIR", "RISK"]},
                         "sztos_score": {"type": "integer", "minimum": 0, "maximum": 10},
                         "telegram_message": {"type": ["string", "null"]}
                     },
-                    "required": ["verdict", "telegram_message", "price_value", "currency", "internal_log", "sztos_score"]
+                    "required": ["verdict", "telegram_message", "price_value", "currency", "internal_log", "sztos_score", "hotel_name"]
                 }
             }
         }

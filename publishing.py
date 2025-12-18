@@ -168,7 +168,14 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<p><i>To są absolutne HITY, zweryfikowane przez naszą AI i audyt Perplexity. Nie przegap!</i></p>"
         for offer in diamond_deals:
             tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej wyjątkowej oferty!")
-            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>"
+            
+            # --- ZABEZPIECZENIE PRZED NULL W TYTULE ---
+            tytul = offer.get('hotel_name')
+            if not tytul or tytul.upper() == "NULL" or tytul.strip() == "":
+                tytul = offer.get('original_title', 'Gorąca Okazja')
+            # ------------------------------------------
+
+            content_html += f"<h4>{html.escape(tytul)}</h4>"
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
@@ -179,7 +186,14 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<p><b>Solidne oferty po audycie Perplexity, które zasługują na Twoją uwagę.</b></p><br/>"
         for offer in good_deals:
             tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej dobrej okazji!")
-            content_html += f"<h4>{html.escape(offer.get('hotel_name', offer.get('original_title', 'Brak tytułu')))}</h4>"
+            
+            # --- ZABEZPIECZENIE PRZED NULL W TYTULE ---
+            tytul = offer.get('hotel_name')
+            if not tytul or tytul.upper() == "NULL" or tytul.strip() == "":
+                tytul = offer.get('original_title', 'Dobra Okazja')
+            # ------------------------------------------
+
+            content_html += f"<h4>{html.escape(tytul)}</h4>"
             if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
             if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
