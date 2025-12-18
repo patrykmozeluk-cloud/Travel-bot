@@ -167,7 +167,10 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
                 log.info(f"Offer '{offer.get('title')}' already in '{target_queue_name}'. Skipping add.")
 
     # Mark all other (low-score) offers as seen
-    low_score_offers = [r for r in all_ai_results if r.get('score') and int(r.get('score', 0)) < 9]
+    low_score_offers = [
+        r for r in all_ai_results 
+        if r.get('category') == 'IGNORE' or (r.get('score') and int(r.get('score', 0)) < 9)
+    ]
     for offer in low_score_offers:
         original_candidate = candidates_by_id.get(offer.get("id"))
         if original_candidate and original_candidate['dedup_key'] not in state["sent_links"]:

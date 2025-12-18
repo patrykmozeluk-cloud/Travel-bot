@@ -4,7 +4,7 @@ import asyncio
 import re
 import random
 import httpx
-import google.generativeai as genai
+from google import genai
 from typing import Dict, Any, List
 from datetime import datetime # Added for digest_timestamp
 
@@ -14,22 +14,18 @@ from utils import make_async_client
 log = logging.getLogger(__name__)
 
 # ---------- LAZY AI MODELS INITIALIZATION ----------
-_gemini_model = None
+_gemini_client = None
 
-def get_gemini_model():
-    """Initializes and returns the Gemini model, creating it only on first use."""
-    global _gemini_model
-    if _gemini_model is None:
+def get_gemini_client():
+    """Initializes and returns the Gemini client, creating it only on first use."""
+    global _gemini_client
+    if _gemini_client is None:
         if config.GEMINI_API_KEY:
-            log.info("Performing first-time initialization of Gemini AI model.")
-            genai.configure(api_key=config.GEMINI_API_KEY)
-            _gemini_model = genai.GenerativeModel(
-                'gemini-2.5-flash',
-                generation_config={"response_mime_type": "application/json", "temperature": 0.2}
-            )
+            log.info("Performing first-time initialization of Gemini AI client.")
+            _gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
         else:
             log.warning("GEMINI_API_KEY not set. AI analysis will be disabled.")
-    return _gemini_model
+    return _gemini_client
 
 # ---------- AI-RELATED FUNCTIONS ----------
 
@@ -38,16 +34,21 @@ async def gemini_api_call_with_retry(prompt_parts, max_retries=4):
     Calls the Gemini API with exponential backoff retry mechanism.
     Handles 429 (Too Many Requests) and 503 (Service Unavailable) errors.
     """
-    model = get_gemini_model()
-    if not model:
-        log.error("Gemini model not available to retry function.")
+    client = get_gemini_client()
+    if not client:
+        log.error("Gemini client not available to retry function.")
         return None
 
     for attempt in range(max_retries):
         try:
-            response = await model.generate_content_async(
-                prompt_parts,
-                safety_settings=config.SAFETY_SETTINGS
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt_parts,
+                config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.2,
+                    "safety_settings": config.SAFETY_SETTINGS
+                }
             )
             return response
         except Exception as e:
@@ -221,40 +222,54 @@ JEŚLI brakuje nazwy hotelu, ale jest standard (np. 4*):
 
 
 async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not get_gemini_model():
-        log.error("Gemini AI model not initialized. Skipping AI analysis.")
+    if not get_gemini_client():
+        log.error("Gemini AI client not initialized. Skipping AI analysis.")
         return []
 
     # New "Silent Selector" prompt
-    system_prompt = """Jesteś surowym filtrem analitycznym dla ofert turystycznych. Twoim zadaniem jest ocena ofert i ich kategoryzacja.
-Analizuj oferty w ich oryginalnym języku (głównie angielski), ale Twoja odpowiedź i wszystkie dane tekstowe MUSZĄ być w języku polskim.
+    system_prompt = """Jesteś surowym, ekonomicznym filtrem analitycznym dla ofert turystycznych.
+Twój cel: Odsiać 95% przeciętnych ofert i zwrócić JSON tylko z tymi wybitnymi.
+Analizuj tekst w oryginale (EN/PL), odpowiedź JSON generuj w języku POLSKIM.
 
-NAJWAŻNIEJSZE ZASADY:
-1.  **ZERO ZGADYWANA**: Nie zgaduj nazwy linii lotniczej, hotelu ani innych detali. Jeśli informacja nie jest jawnie podana, pomiń ją.
-2.  **MERYTORYKA > CLICKBAIT**: Oceniaj faktyczną wartość (cena vs rynkowa), a nie krzykliwy tytuł.
-3.  **GEOLOKACJA**: Zawsze zwracaj kontynent, z którego pochodzi oferta (np. 'Europa', 'Ameryka Północna', 'Azja'). Jeśli to niemożliwe, zwróć 'Global' lub 'Unknown'.
-4.  **CONVICTION (PEWNOŚĆ)**: Oceń w skali 1-10 swoją pewność co do tej oceny.
-    - Jeśli oferta ma mało danych, ale wygląda tanio -> Score wysoki, ale Conviction niski (np. 4).
-    - Jeśli oferta ma pełne dane i jasną cenę -> Conviction wysoki (np. 9-10).
+ZASADY OCENY (SCORE & CONVICTION):
+1.  **CONVICTION (1-10)**: Twoja pewność co do jakości danych.
+    - Jeśli cena jest super niska, ale brakuje dat/linii -> Score może być wysoki, ale Conviction NISKI (np. 3).
+    - Jeśli oferta jest kompletna i pewna -> Conviction WYSOKI (8-10).
+2.  **SCORE (1-10)**: Atrakcyjność oferty.
+    - **10 (SZTOS)**: Ewidentny błąd cenowy (Error Fare) lub historyczne minimum.
+    - **9 (GEM)**: Bardzo rzadka okazja (np. loty do USA < 1500 PLN).
+    - **1-8 (IGNORE)**: Ceny standardowe, reklamy, spam.
 
-NOWA SKALA OCEN (SCORE):
-- **10/10 (SZTOS)**: Błąd cenowy lub historyczne minimum.
-- **9/10 (GEM)**: Wyjątkowa okazja.
-- **1-8/10 (IGNORE)**: Standardowa cena lub spam.
+WYMAGANY FORMAT JSON (Lista obiektów):
 
-KATEGORIE I WYMAGANE DANE W ODPOWIEDZI:
+SCENARIUSZ A: OFERTA "PUSH" (Score 9-10)
+Zwróć pełne dane, aby można było wysłać powiadomienie:
+{
+  "id": (zachowaj ID z inputu),
+  "category": "PUSH",
+  "score": 9,
+  "conviction": 9,
+  "title": "Krótki, chwytliwy tytuł po polsku",
+  "price": "np. 126 USD",
+  "price_value": 126,       // (int) sama liczba dla sortowania, 0 jeśli brak
+  "currency": "USD",        // (string) kod waluty lub NULL
+  "continent": "Ameryka Północna", // (Europa, Azja, Ameryka Północna, Ameryka Południowa, Afryka, Australia, Global)
+  "origin_continent": "Europa", // Skąd wylot?
+  "link": "...",
+  "reasoning": "Cena o 50% niższa niż średnia rynkowa na tej trasie."
+}
 
-1.  **KATEGORIA "PUSH" (Ocena 9-10)**:
-    -   Zwróć: `id`, `link`, `title`, `price`, `score`, `conviction` (NOWE!), `category` ("PUSH"), `continent` (destination), `origin_continent`.
+SCENARIUSZ B: OFERTA "IGNORE" (Score 1-8)
+Oszczędzaj tokeny. Zwróć tylko minimum:
+{
+  "id": (zachowaj ID),
+  "category": "IGNORE"
+}
 
-2.  **KATEGORIA "IGNORE" (Ocena 1-8)**:
-    -   Zwróć: `id`, `category` ("IGNORE"). Reszta opcjonalna.
-
-FORMAT WYJŚCIOWY (CZYSTY JSON):
-[
-  { "id": 0, "link": "...", "title": "...", "price": "999 PLN", "score": 9, "conviction": 8, "category": "PUSH", "continent": "Azja", "origin_continent": "Europa" },
-  { "id": 1, "category": "IGNORE" }
-]"""
+INSTRUKCJA TECHNICZNA:
+- Zwracaj WYŁĄCZNIE czysty JSON. Żadnych wstępów, żadnych markdownów (```).
+- Jeśli brakuje kluczowych danych (cena/kierunek), a tytuł nie sugeruje błędu cenowego -> Kategoria IGNORE.
+"""
     
     user_message = json.dumps(candidates, indent=2)
 

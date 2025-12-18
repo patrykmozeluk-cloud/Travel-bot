@@ -7,7 +7,7 @@ httpx[http2]
 httpx-socks
 beautifulsoup4
 google-cloud-storage
-google-generativeai==0.8.6
+google-genai
 telegraph
 grpcio>=1.62.0
 feedparser
