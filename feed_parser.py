@@ -114,15 +114,16 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
             
             host = urlparse(url).netloc.lower()
             
-            if config.SECRETFLYING_HOST in host:
-                log.info(f"Using curl_cffi for {url}")
-                content = await asyncio.to_thread(fetch_secretflying_feed_nuclear)
+            # TEST: Try standard httpx for everything, bypassing the nuclear option for now.
+            # if config.SECRETFLYING_HOST in host:
+            #     log.info(f"Using curl_cffi for {url}")
+            #     content = await asyncio.to_thread(fetch_secretflying_feed_nuclear)
+            # else:
+            r = await client.get(url, headers=build_headers(url))
+            if r.status_code == 200:
+                content = r.content
             else:
-                r = await client.get(url, headers=build_headers(url))
-                if r.status_code == 200:
-                    content = r.content
-                else:
-                    log.warning(f"HTTPX fetch for {url} failed with status code: {r.status_code}")
+                log.warning(f"HTTPX fetch for {url} failed with status code: {r.status_code}")
 
         if content:
             feed = feedparser.parse(content)
