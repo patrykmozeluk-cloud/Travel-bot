@@ -4,7 +4,7 @@
 https://www.fly4free.pl/feed/
 https://www.fly4free.com/feed/
 https://www.wakacyjnipiraci.pl/feed
-#https://www.secretflying.com/feed/
+https://www.secretflying.com/feed/
 https://www.theflightdeal.com/feed/
 https://www.travel-dealz.com/feed/
 https://travelfree.info/feed/

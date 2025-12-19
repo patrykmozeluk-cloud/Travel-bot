@@ -84,9 +84,10 @@ async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[s
 Otrzymujesz listę max 3 ofert turystycznych. Twoim zadaniem jest ich audyt i przygotowanie wpisów sprzedażowych.
 
 ⚠️ **INSTRUKCJA KRYTYCZNA (ANTY-LENIWA):**
-Dla KAŻDEJ z ofert musisz wykonać **OSOBNE, NIEZALEŻNE wyszukiwanie w internecie**.
-Nie łącz faktów. Nie generalizuj. Traktuj każdą ofertę jako oddzielne, unikalne zadanie.
-Jeśli oferta jest słaba -> WERDYKT 'RISK'. Jeśli dobra -> 'GEM'/'FAIR'.
+1. Dla KAŻDEJ z ofert wykonaj **OSOBNE, NIEZALEŻNE wyszukiwanie w internecie**.
+2. **PRIORYTET FAKTÓW:** Weryfikuj terminy i dane Z TEKSTU OFERTY. Jeśli input mówi "Styczeń", sprawdzaj styczeń. Nie zmieniaj daty na inną (np. marzec), chyba że oferta wygasła.
+3. Nie łącz faktów. Nie generalizuj. Traktuj każdą ofertę jako oddzielne, unikalne zadanie.
+4. **WERDYKT:** Jeśli oferta jest słaba/nieaktualna -> 'RISK'. Jeśli dobra -> 'GEM'/'FAIR'.
 
 **JĘZYK:** WYŁĄCZNIE poprawny polski z zachowaniem naturalnej składni gramatycznej. Tłumacz wszystkie dane z zagranicznych źródeł tak, by brzmiały naturalnie dla Polaka (unikaj kalk językowych).
 
@@ -97,7 +98,7 @@ Dla każdej oferty stwórz post na Telegram (3-5 zdań, płynny tekst).
 **STRUKTURA POSTA:**
 1. **HACZYK:** Wyjaśnij po polsku, dlaczego to "złoto".
 2. **ANALIZA CENY:** Napisz, ile faktycznie oszczędzamy (Użyj **pogrubienia** dla kwot).
-3. **PRO-TIP:** Merytoryczna uwaga z audytu (bagaż/pogoda/lokalizacja).
+3. **PRO-TIP:** Merytoryczna, techniczna wskazówka z audytu (np. o taryfie bagażowej, czasie przesiadki, konkretnej pogodzie lub lokalizacji). **ZAKAZ ogólników typu "ocean czeka" czy "pakuj walizki".** Podaj "mięso".
 4. **CTA:** Ponaglenie.
 
 ### WYMAGANY FORMAT JSON
@@ -112,7 +113,7 @@ Zwróć obiekt z listą "audits":
       "internal_log": "Info techniczne z audytu",
       "verdict": "GEM", // FAIR, RISK
       "sztos_score": 9,     // Liczba (int)
-      "telegram_message": "Twój post po polsku wg zasad powyżej. Pamiętaj o pogrubieniach."
+      "telegram_message": "Twój post po polsku wg zasad powyżej. Pamiętaj o pogrubieniach i merytorycznym Pro-Tipie."
     },
     ...
   ]
