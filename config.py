@@ -49,7 +49,7 @@ THRIFTY_TRAVELER_HOST = "thriftytraveler.com"
 
 # Define which hosts MUST use a proxy for scraping
 PROXY_REQUIRED_HOSTS = {
-    SECRETFLYING_HOST,
+    # SECRETFLYING_HOST, # Test: Direct connection
     THRIFTY_TRAVELER_HOST
 }
 
