@@ -32,19 +32,20 @@ def fetch_secretflying_feed_nuclear():
     }
 
     # Add proxy configuration using the new NORD_USER/NORD_PASS variables
-    proxies = {}
-    if config.NORD_USER and config.NORD_PASS:
-        host = "socks-us29.nordvpn.com"
-        port = 1080
-        proxy_url = f"socks5h://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
-        proxies = {"http": proxy_url, "https": proxy_url} 
-        log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
+    # UPDATE: SecretFlying is now freed from VPN jail. We send requests directly but with high-quality impersonation.
+    proxies = None 
+    # if config.NORD_USER and config.NORD_PASS:
+    #     host = "socks-us29.nordvpn.com"
+    #     port = 1080
+    #     proxy_url = f"socks5h://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
+    #     proxies = {"http": proxy_url, "https": proxy_url} 
+    #     log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
 
     try:
         # Add a random delay (jitter) to make the request timing less predictable
         time.sleep(random.uniform(config.JITTER_MIN_MS / 1000.0, config.JITTER_MAX_MS / 1000.0))
 
-        log.info(f"🚀 Launching curl_cffi nuclear option on: {url}")
+        log.info(f"🚀 Launching curl_cffi nuclear option (DIRECT MODE) on: {url}")
         
         # The impersonate parameter is the key to success. Try a different profile.
         response = cffi_requests.get(
@@ -52,7 +53,7 @@ def fetch_secretflying_feed_nuclear():
             impersonate="chrome120", 
             headers=headers, 
             timeout=30,
-            proxies=proxies # Pass the proxies here
+            proxies=proxies # Pass the proxies here (None)
         )
         
         if response.status_code == 200:
