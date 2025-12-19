@@ -132,6 +132,12 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
             else:
                 log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
 
+        # Rate limit safety sleep
+        if p_batch != candidate_batches[-1]:
+            wait_time = 2
+            log.info(f"Perplexity batch finished. Sleeping {wait_time}s to respect rate limits.")
+            await asyncio.sleep(wait_time)
+
     # 3. Decide on the 'Sztos Alert' from the collected GEMs
     today_str = now_utc.date().isoformat()
     if state.get('last_sztos_alert_date') != today_str:
