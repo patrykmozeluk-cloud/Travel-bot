@@ -15,62 +15,6 @@ from utils import make_async_client
 
 log = logging.getLogger(__name__)
 
-# --- Nuclear Option for SecretFlying ---
-def fetch_secretflying_feed_nuclear():
-    """
-    Uses curl_cffi to impersonate a real browser's TLS fingerprint to bypass
-    Cloudflare's "Super Bot Fight Mode" for the SecretFlying feed.
-    """
-    url = "https://www.secretflying.com/feed/"
-    
-    # These headers are crafted to mimic a real Chrome browser on macOS
-    headers = {
-        'User-Agent': random.choice(config.CHROME_USER_AGENTS),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.google.com/'
-    }
-
-    # Add proxy configuration using the new NORD_USER/NORD_PASS variables
-    # UPDATE: SecretFlying is now freed from VPN jail. We send requests directly but with high-quality impersonation.
-    proxies = None 
-    # if config.NORD_USER and config.NORD_PASS:
-    #     host = "socks-us29.nordvpn.com"
-    #     port = 1080
-    #     proxy_url = f"socks5h://{config.NORD_USER}:{config.NORD_PASS}@{host}:{port}"
-    #     proxies = {"http": proxy_url, "https": proxy_url} 
-    #     log.info(f"Using SOCKS5 proxy for SecretFlying: {host}:{port}")
-
-    try:
-        # Add a random delay (jitter) to make the request timing less predictable
-        time.sleep(random.uniform(config.JITTER_MIN_MS / 1000.0, config.JITTER_MAX_MS / 1000.0))
-
-        log.info(f"🚀 Launching curl_cffi nuclear option (DIRECT MODE) on: {url}")
-        
-        # The impersonate parameter is the key to success. Try a different profile.
-        response = cffi_requests.get(
-            url, 
-            impersonate="chrome120", 
-            headers=headers, 
-            timeout=30,
-            proxies=proxies # Pass the proxies here (None)
-        )
-        
-        if response.status_code == 200:
-            log.info("✅ SUCCESS! SecretFlying feed has been breached via proxy.")
-            return response.text
-        elif response.status_code == 403:
-            log.error("❌ Access Denied (403 Forbidden). This is likely an anti-bot measure.")
-            log.error(f"Response body on 403: {response.text[:500]}") # Log response body for diagnosis
-            return None
-        else:
-            log.error(f"❌ An unexpected error occurred: {response.status_code}")
-            return None
-
-    except Exception as e:
-        log.error(f"❌ A critical error occurred in curl_cffi: {e}", exc_info=True)
-        return None
-
 # Concurrency & Rate Limiting Helpers
 _host_semaphores: Dict[str, asyncio.Semaphore] = {}
 
@@ -114,11 +58,6 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
             
             host = urlparse(url).netloc.lower()
             
-            # TEST: Try standard httpx for everything, bypassing the nuclear option for now.
-            # if config.SECRETFLYING_HOST in host:
-            #     log.info(f"Using curl_cffi for {url}")
-            #     content = await asyncio.to_thread(fetch_secretflying_feed_nuclear)
-            # else:
             r = await client.get(url, headers=build_headers(url))
             if r.status_code == 200:
                 content = r.content
@@ -227,16 +166,13 @@ async def process_all_sources() -> List[Dict[str, any]]:
         detailed_candidates = []
         for i, (title, link, dedup_key, source_url) in enumerate(new_posts):
             host = urlparse(link).netloc.lower().replace("www.", "")
-            description = None
             
-            # SecretFlying descriptions are usually not useful or non-existent
-            if host != config.SECRETFLYING_HOST:
-                # Decide which client to use for scraping the article link
-                use_proxy = any(proxy_host in host for proxy_host in config.PROXY_REQUIRED_HOSTS)
-                client_to_use = proxied_client if use_proxy else direct_client
-                if use_proxy:
-                    log.info(f"Routing description scrape for {host} via proxy.")
-                description = await scrape_description(client_to_use, link)
+            # Decide which client to use for scraping the article link
+            use_proxy = any(proxy_host in host for proxy_host in config.PROXY_REQUIRED_HOSTS)
+            client_to_use = proxied_client if use_proxy else direct_client
+            if use_proxy:
+                log.info(f"Routing description scrape for {host} via proxy.")
+            description = await scrape_description(client_to_use, link)
             
             detailed_candidates.append({
                 "id": i,

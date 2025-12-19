@@ -44,12 +44,10 @@ AI_BATCH_WAIT_SECONDS = int(env("AI_BATCH_WAIT_SECONDS", "1"))
 # ---------- HARDCODED CONSTANTS & DICTIONARIES ----------
 
 # --- HOSTS ---
-SECRETFLYING_HOST = "secretflying.com"
 THRIFTY_TRAVELER_HOST = "thriftytraveler.com"
 
 # Define which hosts MUST use a proxy for scraping
 PROXY_REQUIRED_HOSTS = {
-    # SECRETFLYING_HOST, # Test: Direct connection
     THRIFTY_TRAVELER_HOST
 }
 
@@ -110,7 +108,6 @@ DOMAIN_CONFIG: Dict[str, Dict[str, Any]] = {
         "selectors": ['article.article-item h2 a', 'article.article h2 a'],
         "headers": { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" } 
     },
-    "secretflying.com": { "selectors": ['article.post-item .post-title a', 'article h2 a'], "rss": ["https://www.secretflying.com/feed/"] },
     "wakacyjnipiraci.pl": { 
         "selectors": ['article.post-list__item a.post-list__link'], 
         "rss": ["https://www.wakacyjnipiraci.pl/feed"], 

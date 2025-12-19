@@ -4,11 +4,11 @@
 https://www.fly4free.pl/feed/
 https://www.fly4free.com/feed/
 https://www.wakacyjnipiraci.pl/feed
-https://www.secretflying.com/feed/
 https://www.theflightdeal.com/feed/
 https://www.travel-dealz.com/feed/
 https://travelfree.info/feed/
 https://feeds.feedburner.com/MlecznePodroze
 https://www.tanie-loty.com.pl/czytelnia/feed/
 https://www.holidaypirates.com/feed
+https://news.google.com/rss/search?q=site:secretflying.com&hl=pl&gl=PL&ceid=PL:pl
 https://thriftytraveler.com/feed/

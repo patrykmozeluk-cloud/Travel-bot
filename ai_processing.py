@@ -85,19 +85,22 @@ Otrzymujesz listę max 3 ofert turystycznych. Twoim zadaniem jest ich audyt i pr
 
 ⚠️ **INSTRUKCJE KRYTYCZNE (STOSUJ DO KAŻDEJ OFERTY):**
 1. **NIEZALEŻNOŚĆ:** Dla KAŻDEJ z ofert wykonaj OSOBNE, NIEZALEŻNE wyszukiwanie w internecie. Nie łącz faktów, nie szukaj części wspólnych. Traktuj każdą ofertę jako oddzielne, unikalne zadanie.
-2. **PRIORYTET FAKTÓW:** Ściśle weryfikuj terminy i dane Z TEKSTU WEJŚCIOWEGO. Jeśli input mówi "Styczeń", sprawdzaj styczeń. Nie zmieniaj daty na inną (np. marzec), chyba że oferta wygasła. Bądź precyzyjny co do linii lotniczych i miast wylotu.
+2. **PRIORYTET FAKTÓW:** Ściśle weryfikuj terminy i dane Z TEKSTU WEJŚCIOWEGO. Jeśli input mówi "Styczeń", sprawdzaj styczeń. Nie zmieniaj daty na inną (np. marzec), chyba że oferta wygasła. Bądź precyzyjny co do faktów (np. linii lotniczych, miast wylotu, warunków oferty).
 3. **OBSŁUGA LIST:** Jeśli oferta to artykuł zbiorczy (np. "12 pakietów do ZEA"), NIE ODRZUCAJ GO jako zbyt ogólny. Znajdź w tekście jedną, konkretną i najatrakcyjniejszą ofertę (np. konkretny hotel) i zweryfikuj JĄ jako reprezentanta całego wpisu.
 4. **JĘZYK I SKŁADNIA:** WYŁĄCZNIE poprawny polski z zachowaniem naturalnej, nienagannej składni gramatycznej. Tłumacz dane z zagranicznych źródeł tak, by brzmiały naturalnie dla Polaka (ABSOLUTNY ZAKAZ kalk językowych typu "pakiety startujące od" czy "hotel jest umiejscowiony").
 5. **WERDYKT:** Jeśli oferta jest słaba, nieaktualna lub dane się nie zgadzają -> 'RISK'. Jeśli dobra -> 'GEM' lub 'FAIR'.
 
 ### 📝 ZASADY TWORZENIA TREŚCI (Pole "telegram_message")
-Dla każdej oferty stwórz post na Telegram (3-5 zdań, płynny tekst). Pisz jak kumpel-ekspert.
+Dla każdej oferty stwórz post na Telegram. Pisz jako profesjonalny analityk ofert turystycznych. Stosuj WYŁĄCZNIE poniższą strukturę:
 
-**STRUKTURA POSTA:**
-1. **HACZYK:** Wyjaśnij emocjonalnie, dlaczego ta oferta to "złoto" (np. "🔥 Historyczne minimum!").
-2. **ANALIZA CENY:** Napisz konkretnie, ile oszczędzamy (Użyj **pogrubienia** dla kwot).
-3. **PRO-TIP:** Merytoryczna, techniczna wskazówka (np. o taryfie bagażowej, transporcie z lotniska, pogodzie lub wizie). **ZAKAZ lania wody i ogólników (np. "ocean czeka", "bierz ręcznik").** Podaj "mięso".
-4. **CTA:** Krótkie ponaglenie.
+**STRUKTURA (STOSUJ DOKŁADNIE):**
+1. **TYTUŁ:** [Kierunek] za [Cena] — [Krótki komentarz]! [Emoji]
+2. **OPIS:** 3-5 zdania płynnego tekstu wyjaśniające, dlaczego oferta jest dobra i dla kogo (np. loty transatlantyckie, ferie). Napisz szczerze, czego brakuje (np. hotelu).
+3. **SEKCJA "🔥 Co ważne:":**
+   - Cena: [Pogrubiona Kwota] za [Zakres, np. bilet].
+   - Zakres: Krótka informacja co wchodzi w skład (np. tylko loty, all inclusive).
+4. **PRO-TIP:** Jedna, mięsista wskazówka techniczna (np. o bagażu, pogodzie, transporcie z lotniska lub wizie). Unikaj ogólników.
+5. **CTA:** Jedno krótkie zdanie zachęcające do szybkiej akcji.
 
 ### WYMAGANY FORMAT JSON
 Zwróć obiekt z listą "audits":
@@ -200,7 +203,7 @@ async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     # New "Silent Selector" prompt
     system_prompt = """Jesteś surowym, ekonomicznym filtrem analitycznym dla ofert turystycznych.
-Twój cel: Odsiać 95% przeciętnych ofert i zwrócić JSON tylko z tymi wybitnymi.
+Twój cel: Działaj jak bezlitosny filtr. Odrzucaj bez wahania oferty przeciętne i "tylko dobre". Zwracaj w JSON tylko te wybitne.
 Analizuj tekst w oryginale (EN/PL), odpowiedź JSON generuj w języku POLSKIM.
 
 ZASADY OCENY (SCORE & CONVICTION):
