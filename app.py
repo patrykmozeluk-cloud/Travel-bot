@@ -130,7 +130,9 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
             elif full_offer_details.get("verdict") == "FAIR":
                 fair_offers.append(full_offer_details)
             else:
-                log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
+                reason = full_offer_details.get('internal_log', 'Brak uzasadnienia')
+                link = full_offer_details.get('link', 'Brak linku')
+                log.warning(f"⛔ REJECTED '{candidate.get('title')}'. Verdict: {full_offer_details.get('verdict')}. Reason: {reason} | Link: {link}")
 
         # Rate limit safety sleep
         if p_batch != candidate_batches[-1]:
