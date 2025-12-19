@@ -15,6 +15,41 @@ from utils import make_async_client
 
 log = logging.getLogger(__name__)
 
+# --- Nuclear Option for Google News ---
+def fetch_with_cffi(url: str):
+    """
+    Uses curl_cffi to impersonate a real browser's TLS fingerprint.
+    Crucial for Google News RSS which blocks standard Python http clients (httpx/requests)
+    running from Cloud IPs.
+    """
+    try:
+        # Jitter to look more human
+        time.sleep(random.uniform(0.5, 1.5))
+
+        log.info(f"🚀 Launching curl_cffi (Chrome impersonation) for: {url}")
+        
+        response = cffi_requests.get(
+            url, 
+            impersonate="chrome120", 
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7',
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            log.info(f"✅ SUCCESS! {url} breached via curl_cffi.")
+            return response.content
+        else:
+            log.error(f"❌ curl_cffi failed for {url} with status: {response.status_code}")
+            return None
+
+    except Exception as e:
+        log.error(f"❌ Error in curl_cffi: {e}", exc_info=True)
+        return None
+
 # Concurrency & Rate Limiting Helpers
 _host_semaphores: Dict[str, asyncio.Semaphore] = {}
 
@@ -66,11 +101,16 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
             
             host = urlparse(url).netloc.lower()
             
-            r = await client.get(url, headers=build_headers(url))
-            if r.status_code == 200:
-                content = r.content
+            # Special routing for Google News (requires TLS impersonation)
+            if "news.google.com" in host or "google.com" in host:
+                content = await asyncio.to_thread(fetch_with_cffi, url)
             else:
-                log.warning(f"HTTPX fetch for {url} failed with status code: {r.status_code}")
+                # Standard fetch for friendly RSS feeds
+                r = await client.get(url, headers=build_headers(url))
+                if r.status_code == 200:
+                    content = r.content
+                else:
+                    log.warning(f"HTTPX fetch for {url} failed with status code: {r.status_code}")
 
         if content:
             feed = feedparser.parse(content)
