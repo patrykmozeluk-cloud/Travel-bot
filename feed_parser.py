@@ -35,6 +35,14 @@ def build_headers(url: str) -> Dict[str, str]:
     }
     # Allow for domain-specific overrides
     domain_headers = config.DOMAIN_CONFIG.get(host, {}).get("headers")
+    
+    # Specific fix for Google News RSS to avoid 503
+    if "news.google.com" in host or "google.com" in host:
+         headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8"
+         # Google News often prefers cookies or specific accept-language to serve content correctly
+         headers["Accept-Language"] = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
+
     if domain_headers: 
         headers.update(domain_headers)
     return headers
