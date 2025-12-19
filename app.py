@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import config
 from gcs_state import load_state, save_state_atomic, sanitizing_startup_check, prune_sent_links, remember_for_deletion, perform_delete_sweep
 from feed_parser import process_all_sources
-from ai_processing import analyze_batch, run_full_perplexity_audit # Updated import
+from ai_processing import analyze_batch, run_batch_perplexity_audit # Updated import
 from publishing import publish_digest_async, send_telegram_message_async
 from utils import make_async_client 
 
@@ -48,8 +48,13 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
     candidate_chunks = [detailed_candidates[i:i + config.AI_BATCH_SIZE] for i in range(0, len(detailed_candidates), config.AI_BATCH_SIZE)]
     all_ai_results = []
     for i, chunk in enumerate(candidate_chunks):
-        results = await analyze_batch(chunk)
-        all_ai_results.extend(results)
+        try:
+            results = await analyze_batch(chunk)
+            all_ai_results.extend(results)
+        except Exception as e:
+            log.error(f"Error during AI batch analysis {i+1}/{len(candidate_chunks)}: {e}")
+            break
+
         if i < len(candidate_chunks) - 1:
             wait_time = config.AI_BATCH_WAIT_SECONDS
             log.info(f"Processed chunk {i+1}/{len(candidate_chunks)}. Waiting {wait_time}s.")
@@ -75,35 +80,57 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
     ]
     log.info(f"Found {len(perplexity_candidates)} candidates (Score >= 9 & Conviction >= 7) requiring Perplexity audit.")
 
-    # 2. Audit all candidates and collect GEMs and FAIRs
+    # 2. Audit all candidates and collect GEMs and FAIRs in batches of 3
     gem_offers = []
     fair_offers = []
 
-    for candidate in perplexity_candidates:
-        original_candidate = candidates_by_id.get(candidate.get("id"))
-        if not original_candidate:
-            log.warning(f"Orphaned AI result with ID {candidate.get('id')}. Skipping.")
-            continue
-        
-        state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
-        state_modified = True
-        
-        log.info(f"Running Perplexity audit for '{candidate.get('title')}' (Score: {candidate.get('score')}).")
-        offer_price = original_candidate.get('price') or candidate.get('price', 'Brak ceny')
-        audit_result = await run_full_perplexity_audit(
-            title=candidate.get('title'),
-            price=offer_price,
-            link=original_candidate['link']
-        )
-        
-        full_offer_details = {**original_candidate, **candidate, **audit_result, 'ai_score': candidate.get('score')}
+    # Prepare batches of 3
+    PERPLEXITY_BATCH_SIZE = 3
+    candidate_batches = [perplexity_candidates[i:i + PERPLEXITY_BATCH_SIZE] for i in range(0, len(perplexity_candidates), PERPLEXITY_BATCH_SIZE)]
 
-        if full_offer_details.get("verdict") == "GEM":
-            gem_offers.append(full_offer_details)
-        elif full_offer_details.get("verdict") == "FAIR":
-            fair_offers.append(full_offer_details)
-        else:
-            log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
+    for p_batch in candidate_batches:
+        log.info(f"Running Perplexity batch audit for {len(p_batch)} candidates.")
+        
+        # Prepare data for the audit call
+        batch_to_audit = []
+        for candidate in p_batch:
+            original_candidate = candidates_by_id.get(candidate.get("id"))
+            if not original_candidate: continue
+            
+            offer_price = original_candidate.get('price') or candidate.get('price', 'Brak ceny')
+            batch_to_audit.append({
+                "id": candidate.get("id"),
+                "title": candidate.get("title"),
+                "price": offer_price,
+                "link": original_candidate['link']
+            })
+
+        # Call the batch audit
+        batch_results = await run_batch_perplexity_audit(batch_to_audit)
+        
+        # Process results
+        results_by_id = {str(r.get('id')): r for r in batch_results}
+        
+        for candidate in p_batch:
+            original_candidate = candidates_by_id.get(candidate.get("id"))
+            if not original_candidate: continue
+
+            audit_result = results_by_id.get(str(candidate.get("id")))
+            if not audit_result or audit_result.get('verdict') == 'ERROR':
+                log.error(f"Audit failed or missing for ID {candidate.get('id')}. Skipping.")
+                continue
+
+            state["sent_links"][original_candidate['dedup_key']] = now_utc_iso
+            state_modified = True
+
+            full_offer_details = {**original_candidate, **candidate, **audit_result, 'ai_score': candidate.get('score')}
+
+            if full_offer_details.get("verdict") == "GEM":
+                gem_offers.append(full_offer_details)
+            elif full_offer_details.get("verdict") == "FAIR":
+                fair_offers.append(full_offer_details)
+            else:
+                log.warning(f"Perplexity audit REJECTED offer '{candidate.get('title')}'. Verdict: '{full_offer_details.get('verdict')}'. Discarding.")
 
     # 3. Decide on the 'Sztos Alert' from the collected GEMs
     today_str = now_utc.date().isoformat()
