@@ -78,7 +78,7 @@ async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[s
     # Construct the user prompt with the list of offers
     offers_text = ""
     for i, item in enumerate(batch):
-        offers_text += f"\n--- OFERTA {i+1} (ID: {item.get('id')}) ---\nTytuł: {item.get('title')}\nCena: {item.get('price', 'N/A')}\nLink: {item.get('link')}\n"
+        offers_text += f"\n--- OFERTA {i+1} (ID: {item.get('id')}) ---\nTytuł: {item.get('title')}\nCena: {item.get('price', 'N/A')}\nOpis: {item.get('description', 'Brak opisu')}\nLink: {item.get('link')}\n"
 
     # --- NOWY SYSTEM PROMPT (Enterprise Batch Version 2.1) ---
     system_prompt = """### 🧠 ROLA: EKSPERT-SPRZEDAWCA (TRYB BATCH)

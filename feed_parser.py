@@ -157,9 +157,9 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
             if p_tag:
                 text = p_tag.get_text(separator=' ', strip=True)
                 if len(text) > 40:
-                    if len(text) > 500:
-                        last_space = text.rfind(' ', 0, 500)
-                        return text[:last_space] + '...' if last_space != -1 else text[:500] + '...'
+                    if len(text) > 3000:
+                        last_space = text.rfind(' ', 0, 3000)
+                        return text[:last_space] + '...' if last_space != -1 else text[:3000] + '...'
                     else:
                         return text
     except Exception as e:
