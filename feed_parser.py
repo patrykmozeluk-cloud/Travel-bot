@@ -151,15 +151,24 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
 
         soup = BeautifulSoup(content, "html.parser")
         
-        selectors = ['article p', '.entry-content p', '.post-content p', 'main p']
+        # Zmienione selektory na kontenery, aby łapać też listy <li>, nagłówki itp.
+        selectors = ['article', '.entry-content', '.post-content', '.post-body', 'main']
         for sel in selectors:
-            p_tag = soup.select_one(sel)
-            if p_tag:
-                text = p_tag.get_text(separator=' ', strip=True)
+            container = soup.select_one(sel)
+            if container:
+                # OPTYMALIZACJA: Usuwamy śmieci (skrypty, style, nawigację) ZANIM pobierzemy tekst
+                for garbage in container.select('script, style, nav, footer, form, iframe, .share-buttons, .related-posts'):
+                    garbage.decompose()
+
+                # Pobieramy tekst z oczyszczonego kontenera
+                text = container.get_text(separator=' ', strip=True)
+                
+                # Limit 1500 znaków - teraz to same konkrety, bo usunęliśmy śmieci
                 if len(text) > 40:
-                    if len(text) > 3000:
-                        last_space = text.rfind(' ', 0, 3000)
-                        return text[:last_space] + '...' if last_space != -1 else text[:3000] + '...'
+                    limit = 1500
+                    if len(text) > limit:
+                        last_space = text.rfind(' ', 0, limit)
+                        return text[:last_space] + '...' if last_space != -1 else text[:limit] + '...'
                     else:
                         return text
     except Exception as e:

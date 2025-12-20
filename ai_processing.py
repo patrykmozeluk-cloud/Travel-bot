@@ -285,8 +285,8 @@ INSTRUKCJA TECHNICZNA:
 - Zwracaj WYŁĄCZNIE czysty JSON. Żadnych wstępów, żadnych markdownów (```).
 - Jeśli brakuje kluczowych danych (cena/kierunek), a tytuł nie sugeruje błędu cenowego -> Kategoria IGNORE.
 """
-    
-    user_message = json.dumps(candidates, indent=2)
+    # OPTYMALIZACJA KOSZTÓW: Kompresja JSON (usuwamy spacje i nowe linie)
+    user_message = json.dumps(candidates, separators=(',', ':'))
 
     log.info(f"Sending a batch of {len(candidates)} candidates to Gemini AI with 'Sztos vs Reszta' prompt.")
     
