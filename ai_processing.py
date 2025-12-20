@@ -6,7 +6,7 @@ import random
 import httpx
 from google import genai
 from typing import Dict, Any, List
-from datetime import datetime # Added for digest_timestamp
+from datetime import datetime
 
 import config
 from utils import make_async_client
@@ -69,7 +69,7 @@ async def gemini_api_call_with_retry(prompt_parts, max_retries=4):
 async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Uses Perplexity API to perform a batch audit of up to 3 offers in a single request.
-    Uses an "Anti-Lazy" prompt to force independent searches.
+    Uses the ENTERPRISE PROMPT 2.0 (Fact Enforcement + New Telegram Style).
     """
     if not config.PERPLEXITY_API_KEY:
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
@@ -80,45 +80,44 @@ async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[s
     for i, item in enumerate(batch):
         offers_text += f"\n--- OFERTA {i+1} (ID: {item.get('id')}) ---\nTytuł: {item.get('title')}\nCena: {item.get('price', 'N/A')}\nLink: {item.get('link')}\n"
 
+    # --- NOWY SYSTEM PROMPT (Enterprise Batch Version) ---
     system_prompt = """### 🧠 ROLA: EKSPERT-SPRZEDAWCA (TRYB BATCH)
 Otrzymujesz listę max 3 ofert turystycznych. Twoim zadaniem jest ich audyt i przygotowanie wpisów sprzedażowych.
 
 ⚠️ **INSTRUKCJE KRYTYCZNE (STOSUJ DO KAŻDEJ OFERTY):**
-1. **NIEZALEŻNOŚĆ:** Dla KAŻDEJ z ofert wykonaj OSOBNE, NIEZALEŻNE wyszukiwanie w internecie. Nie łącz faktów, nie szukaj części wspólnych. Traktuj każdą ofertę jako oddzielne, unikalne zadanie.
-2. **PRIORYTET FAKTÓW:** Ściśle weryfikuj terminy i dane Z TEKSTU WEJŚCIOWEGO. Jeśli input mówi "Styczeń", sprawdzaj styczeń. Nie zmieniaj daty na inną (np. marzec), chyba że oferta wygasła. Bądź precyzyjny co do faktów (np. linii lotniczych, miast wylotu, warunków oferty).
-3. **OBSŁUGA LIST:** Jeśli oferta to artykuł zbiorczy (np. "12 pakietów do ZEA"), NIE ODRZUCAJ GO jako zbyt ogólny. Znajdź w tekście jedną, konkretną i najatrakcyjniejszą ofertę (np. konkretny hotel) i zweryfikuj JĄ jako reprezentanta całego wpisu.
-4. **JĘZYK I SKŁADNIA:** WYŁĄCZNIE poprawny polski z zachowaniem naturalnej, nienagannej składni gramatycznej. Tłumacz dane z zagranicznych źródeł tak, by brzmiały naturalnie dla Polaka (ABSOLUTNY ZAKAZ kalk językowych typu "pakiety startujące od" czy "hotel jest umiejscowiony").
-5. **WERDYKT:** Jeśli oferta jest słaba, nieaktualna lub dane się nie zgadzają -> 'RISK'. Jeśli dobra -> 'GEM' lub 'FAIR'.
+1. **IZOLACJA:** Każdą ofertę z listy analizuj OSOBNO. Nie łącz faktów, nie szukaj części wspólnych. Traktuj każdą pozycję jako oddzielne zadanie.
+2. **PRIORYTET FAKTÓW:** Ściśle weryfikuj dane. Jeśli input mówi "Styczeń", nie zmieniaj na marzec.
+3. **OBSŁUGA LIST:** Jeśli oferta to artykuł zbiorczy, wybierz jedną najlepszą (reprezentatywną) ofertę z tekstu i opisz ją.
 
-### 📝 ZASADY TWORZENIA TREŚCI (Pole "telegram_message")
-Dla każdej oferty stwórz post na Telegram. Pisz jako profesjonalny analityk ofert turystycznych. Stosuj WYŁĄCZNIE poniższą strukturę:
+---
 
-**STRUKTURA (STOSUJ DOKŁADNIE):**
-1. **TYTUŁ:** [Kierunek] za [Cena] — [Krótki komentarz]! [Emoji]
-2. **OPIS:** 3-5 zdania płynnego tekstu wyjaśniające, dlaczego oferta jest dobra i dla kogo (np. loty transatlantyckie, ferie). Napisz szczerze, czego brakuje (np. hotelu).
-3. **SEKCJA "🔥 Co ważne:":**
-   - Cena: [Pogrubiona Kwota] za [Zakres, np. bilet].
-   - Zakres: Krótka informacja co wchodzi w skład (np. tylko loty, all inclusive).
-4. **PRO-TIP:** Jedna, mięsista wskazówka techniczna (np. o bagażu, pogodzie, transporcie z lotniska lub wizie). Unikaj ogólników.
-5. **CTA:** Jedno krótkie zdanie zachęcające do szybkiej akcji.
+### KROK 1: EKSTRAKCJA DANYCH (Fact Enforcement)
+Zanim napiszesz treść, uzupełnij pola JSON twardymi danymi:
+1. **Linie Lotnicze (`airlines`):** Znajdź nazwę przewoźnika w tekście lub na obrazku. Jeśli widzisz "obsługiwane przez Condor", wpisz "Condor". Jeśli to pakiet i linia jest nieznana, wpisz "Charter / Low-cost".
+2. **Daty (`date_range`):** Szukaj zakresu miesięcy (np. "Styczeń - Marzec 2026"). Unikaj konkretnych dni, chyba że oferta jest na sztywny termin. NIGDY nie pisz "do potwierdzenia".
+3. **Cena (`price_value`):** Najniższa dostępna cena (liczba).
 
-### WYMAGANY FORMAT JSON
-Zwróć obiekt z listą "audits":
-{
-  "audits": [
-    {
-      "id": "PRZEPISZ DOKŁADNIE ID Z INPUTU",
-      "hotel_name": "Polski tytuł oferty (poprawna składnia)",
-      "price_value": 2500,  // WAŻNE: Liczba (int)
-      "currency": "WYKRYTA WALUTA (np. PLN, EUR, USD)",
-      "internal_log": "Info techniczne z audytu",
-      "verdict": "GEM", // FAIR, RISK
-      "sztos_score": 9,     // Liczba (int)
-      "telegram_message": "Twój post po polsku wg zasad powyżej. Pamiętaj o pogrubieniach i merytorycznym Pro-Tipie."
-    },
-    ...
-  ]
-}"""
+### KROK 2: ANALIZA (`internal_log`)
+W brudnopisie oceń opłacalność, haczyki (bagaż, przesiadki) i strategię sprzedaży. Wykorzystaj to, by wyeliminować błędy logiczne.
+
+### KROK 3: TREŚĆ TELEGRAM (`telegram_message`)
+Stwórz post gotowy do publikacji.
+**STYL:** Krótki, męski, konkretny. Jak SMS eksperta do kumpla. Zero marketingu ("rajskie plaże").
+**STRUKTURA:**
+1. **NAGŁÓWEK:** `[Emoji] Kierunek + **Cena** + (wartość z pola airlines)`
+   *Wzór:* 🇺🇸 Nowy Jork z Londynu za **258 GBP** (Norse Atlantic)
+2. **ODSTĘP (Pusta linia)**
+3. **TREŚĆ (Max 3 zdania):**
+   - Pisz ciągłym tekstem (prozą).
+   - Połącz ocenę okazji ("historyczne minimum") z uwagami technicznymi ("brak bagażu") w jedno płynne zdanie.
+   - **POGRUBIENIA:** Użyj **bolda** w treści TYLKO RAZ dla najważniejszego atutu (np. **lot bezpośredni**). Nie pogrubiaj całych zdań.
+   - ZABRONIONE: Nagłówki ("Werdykt:", "Pro-Tip:"), listy punktowane, asekuranctwo ("sprawdź daty").
+
+### KROK 4: WERDYKT (`verdict`)
+- **GEM:** Super okazja / błąd cenowy.
+- **FAIR:** Uczciwa cena rynkowa.
+- **RISK:** Słaba oferta / brak danych / podejrzenie oszustwa.
+    """
 
     payload = {
         "model": "sonar",
@@ -133,6 +132,8 @@ Zwróć obiekt z listą "audits":
         "response_format": {
             "type": "json_schema",
             "json_schema": {
+                "name": "travel_audit_batch_response",
+                "strict": true,
                 "schema": {
                     "type": "object",
                     "properties": {
@@ -141,20 +142,54 @@ Zwróć obiekt z listą "audits":
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "id": {"type": ["string", "integer"]},
-                                    "hotel_name": {"type": "string"},
-                                    "price_value": {"type": ["number", "string", "integer"]},
-                                    "currency": {"type": "string"},
-                                    "internal_log": {"type": "string"},
-                                    "verdict": {"type": "string", "enum": ["GEM", "FAIR", "RISK"]},
-                                    "sztos_score": {"type": "integer"},
-                                    "telegram_message": {"type": ["string", "null"]}
+                                    "id": { "type": ["string", "integer"] },
+                                    "hotel_name": { "type": "string", "description": "Krótki tytuł oferty po polsku" },
+                                    "destination": { "type": "string" },
+                                    "origin": { "type": "string" },
+                                    "airlines": { 
+                                        "type": "string",
+                                        "description": "Konkretna linia lub 'Charter'. Nie wpisuj 'nieznana'."
+                                    },
+                                    "date_range": { 
+                                        "type": "string",
+                                        "description": "Zakres miesięcy (np. 'Styczeń - Marzec 2026')."
+                                    },
+                                    "price_value": { "type": ["number", "integer"] },
+                                    "currency": { "type": "string" },
+                                    "internal_log": { 
+                                        "type": "string",
+                                        "description": "Analiza logiczna oferty i haczyków."
+                                    },
+                                    "verdict": { 
+                                        "type": "string", 
+                                        "enum": ["GEM", "FAIR", "RISK"] 
+                                    },
+                                    "sztos_score": { "type": "integer" },
+                                    "telegram_message": { 
+                                        "type": "string",
+                                        "description": "Gotowy post na Telegram wg zasad formatowania."
+                                    }
                                 },
-                                "required": ["id", "verdict", "telegram_message", "price_value", "currency", "internal_log", "hotel_name"]
+                                "required": [
+                                    "id", 
+                                    "hotel_name", 
+                                    "destination", 
+                                    "origin", 
+                                    "airlines", 
+                                    "date_range", 
+                                    "price_value", 
+                                    "currency", 
+                                    "internal_log", 
+                                    "verdict", 
+                                    "sztos_score", 
+                                    "telegram_message"
+                                ],
+                                "additionalProperties": false
                             }
                         }
                     },
-                    "required": ["audits"]
+                    "required": ["audits"],
+                    "additionalProperties": false
                 }
             }
         }
@@ -182,7 +217,8 @@ Zwróć obiekt z listą "audits":
                 # Clean citations and ensure Polish
                 for audit in audits:
                     if audit.get('telegram_message'):
-                        audit['telegram_message'] = re.sub(r'\[\d+\]', '', audit['telegram_message']).strip()
+                        # Usuwanie cytatów [1] itp.
+                        audit['telegram_message'] = re.sub(r'[\[\]\d+]', '', audit['telegram_message']).strip()
                 
                 log.info(f"Perplexity batch audit successful. Processed {len(audits)} offers.")
                 return audits
@@ -201,7 +237,7 @@ async def analyze_batch(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]
         log.error("Gemini AI client not initialized. Skipping AI analysis.")
         return []
 
-    # New "Silent Selector" prompt
+    # System Prompt "Sztos vs Reszta" (Dla Gemini)
     system_prompt = """Jesteś surowym, ekonomicznym filtrem analitycznym dla ofert turystycznych.
 Twój cel: Działaj jak bezlitosny filtr. Odrzucaj bez wahania oferty przeciętne i "tylko dobre". Zwracaj w JSON tylko te wybitne.
 Analizuj tekst w oryginale (EN/PL), odpowiedź JSON generuj w języku POLSKIM.
@@ -259,16 +295,12 @@ INSTRUKCJA TECHNICZNA:
         return []
         
     try:
-        # Attempt to clean the response from markdown and then load
         cleaned_text = re.sub(r'```json\n|```', '', response.text).strip()
         ai_results = json.loads(cleaned_text)
         
         if not isinstance(ai_results, list):
             log.error(f"Gemini API returned data that is not a list: {ai_results}")
             return []
-        
-        # (digest_timestamp logic removed as DIGEST category is deprecated)
-
         
         log.info(f"AI processed batch and returned {len(ai_results)} categorized results.")
         return ai_results

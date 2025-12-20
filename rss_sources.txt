@@ -10,5 +10,4 @@ https://travelfree.info/feed/
 https://feeds.feedburner.com/MlecznePodroze
 https://www.tanie-loty.com.pl/czytelnia/feed/
 https://www.holidaypirates.com/feed
-https://news.google.com/rss/search?q=site:secretflying.com&hl=pl&gl=PL&ceid=PL:pl
-https://thriftytraveler.com/feed/
+https://www.rushflights.com/feed

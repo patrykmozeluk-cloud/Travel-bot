@@ -47,9 +47,7 @@ AI_BATCH_WAIT_SECONDS = int(env("AI_BATCH_WAIT_SECONDS", "1"))
 THRIFTY_TRAVELER_HOST = "thriftytraveler.com"
 
 # Define which hosts MUST use a proxy for scraping
-PROXY_REQUIRED_HOSTS = {
-    THRIFTY_TRAVELER_HOST
-}
+PROXY_REQUIRED_HOSTS = set()
 
 # --- URL CLEANING ---
 DROP_PARAMS: set = {

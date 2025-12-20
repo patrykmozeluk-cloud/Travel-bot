@@ -3,7 +3,8 @@ import logging
 import random
 import html
 import json
-import asyncio # Added missing import
+import asyncio
+import re
 from typing import Dict, Any, List
 from telegraph import Telegraph
 from datetime import datetime # Keep datetime for strftime
@@ -29,6 +30,16 @@ _TRAVEL_IMAGES = list(set([
 ]))
 
 log = logging.getLogger(__name__)
+
+def format_for_telegraph(text: str) -> str:
+    """Converts telegram_message Markdown (**bold**) and newlines to Telegraph-compatible HTML."""
+    if not text:
+        return ""
+    # Convert **bold** to <b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    # Convert newlines to <br>
+    text = text.replace('\n', '<br>')
+    return text
 
 
 async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: str, button_text: str, button_url: str) -> int | None:
@@ -167,35 +178,21 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<h3>💎 Perełki Dnia (AI Score 10) 💎</h3>"
         content_html += "<p><i>To są absolutne HITY, zweryfikowane przez naszą AI i audyt Perplexity. Nie przegap!</i></p>"
         for offer in diamond_deals:
-            tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej wyjątkowej oferty!")
+            # Używamy sformatowanej wiadomości z AI (Telegram Style)
+            formatted_msg = format_for_telegraph(offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej wyjątkowej oferty!"))
             
-            # --- ZABEZPIECZENIE PRZED NULL W TYTULE ---
-            tytul = offer.get('hotel_name')
-            if not tytul or tytul.upper() == "NULL" or tytul.strip() == "":
-                tytul = offer.get('original_title', 'Gorąca Okazja')
-            # ------------------------------------------
-
-            content_html += f"<h4>{html.escape(tytul)}</h4>"
-            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
-            if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
-            content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
+            content_html += f"<p>{formatted_msg}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
     if good_deals:
         content_html += "<h3>🌟 Dobre Okazje (AI Score 9) 🌟</h3>"
         content_html += "<p><b>Solidne oferty po audycie Perplexity, które zasługują na Twoją uwagę.</b></p><br/>"
         for offer in good_deals:
-            tekst = offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej dobrej okazji!")
-            
-            # --- ZABEZPIECZENIE PRZED NULL W TYTULE ---
-            tytul = offer.get('hotel_name')
-            if not tytul or tytul.upper() == "NULL" or tytul.strip() == "":
-                tytul = offer.get('original_title', 'Dobra Okazja')
-            # ------------------------------------------
+            # Używamy sformatowanej wiadomości z AI (Telegram Style)
+            formatted_msg = format_for_telegraph(offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej dobrej okazji!"))
 
-            content_html += f"<h4>{html.escape(tytul)}</h4>"
-            if offer.get('price_value'): content_html += f"<p><b>Cena:</b> {html.escape(str(offer['price_value']))} {html.escape(offer.get('currency', ''))}</p>"
-            if tekst: content_html += f"<p><b>Analiza:</b> {html.escape(tekst)}</p>"
+            content_html += f"<p>{formatted_msg}</p>"
+            content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
     

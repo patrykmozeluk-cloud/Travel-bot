@@ -101,8 +101,8 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
             
             host = urlparse(url).netloc.lower()
             
-            # Special routing for Google News (requires TLS impersonation)
-            if "news.google.com" in host or "google.com" in host:
+            # Special routing for Google News and RushFlights (requires TLS impersonation)
+            if any(domain in host for domain in ["news.google.com", "google.com", "rushflights.com"]):
                 content = await asyncio.to_thread(fetch_with_cffi, url)
             else:
                 # Standard fetch for friendly RSS feeds
@@ -127,13 +127,29 @@ async def fetch_feed(client: httpx.AsyncClient, url: str) -> List[Tuple[str, str
     return posts
 
 async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
-    """Scrapes a short description from a given URL."""
+    """Scrapes a short description from a given URL, using impersonation for restricted domains."""
     try:
+        host = urlparse(url).netloc.lower()
+        content = None
+
         async with _sem_for(url):
             await _jitter() # Add jitter to scraping requests
-            r = await client.get(url, headers=build_headers(url))
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+            
+            # Use TLS impersonation for specific domains
+            if any(domain in host for domain in ["news.google.com", "google.com", "rushflights.com"]):
+                content = await asyncio.to_thread(fetch_with_cffi, url)
+            else:
+                r = await client.get(url, headers=build_headers(url))
+                if r.status_code == 200:
+                    content = r.content
+                else:
+                    if config.DEBUG_FEEDS:
+                        log.info(f"DEBUG: HTTPX fetch for description at {url} failed: {r.status_code}")
+
+        if not content:
+            return None
+
+        soup = BeautifulSoup(content, "html.parser")
         
         selectors = ['article p', '.entry-content p', '.post-content p', 'main p']
         for sel in selectors:
