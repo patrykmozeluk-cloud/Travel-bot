@@ -133,7 +133,7 @@ Stwórz post gotowy do publikacji.
             "type": "json_schema",
             "json_schema": {
                 "name": "travel_audit_batch_response",
-                "strict": true,
+                "strict": True,
                 "schema": {
                     "type": "object",
                     "properties": {
@@ -184,12 +184,12 @@ Stwórz post gotowy do publikacji.
                                     "sztos_score", 
                                     "telegram_message"
                                 ],
-                                "additionalProperties": false
+                                "additionalProperties": False
                             }
                         }
                     },
                     "required": ["audits"],
-                    "additionalProperties": false
+                    "additionalProperties": False
                 }
             }
         }
