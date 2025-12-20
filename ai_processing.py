@@ -69,7 +69,7 @@ async def gemini_api_call_with_retry(prompt_parts, max_retries=4):
 async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Uses Perplexity API to perform a batch audit of up to 3 offers in a single request.
-    Uses the ENTERPRISE PROMPT 2.0 (Fact Enforcement + New Telegram Style).
+    Uses the ENTERPRISE PROMPT 2.1 (Fact Enforcement + New Telegram Style).
     """
     if not config.PERPLEXITY_API_KEY:
         log.warning("PERPLEXITY_API_KEY not set. Cannot perform audit.")
@@ -80,7 +80,7 @@ async def run_batch_perplexity_audit(batch: List[Dict[str, Any]]) -> List[Dict[s
     for i, item in enumerate(batch):
         offers_text += f"\n--- OFERTA {i+1} (ID: {item.get('id')}) ---\nTytuł: {item.get('title')}\nCena: {item.get('price', 'N/A')}\nLink: {item.get('link')}\n"
 
-    # --- NOWY SYSTEM PROMPT (Enterprise Batch Version) ---
+    # --- NOWY SYSTEM PROMPT (Enterprise Batch Version 2.1) ---
     system_prompt = """### 🧠 ROLA: EKSPERT-SPRZEDAWCA (TRYB BATCH)
 Otrzymujesz listę max 3 ofert turystycznych. Twoim zadaniem jest ich audyt i przygotowanie wpisów sprzedażowych.
 
@@ -93,7 +93,10 @@ Otrzymujesz listę max 3 ofert turystycznych. Twoim zadaniem jest ich audyt i pr
 
 ### KROK 1: EKSTRAKCJA DANYCH (Fact Enforcement)
 Zanim napiszesz treść, uzupełnij pola JSON twardymi danymi:
-1. **Linie Lotnicze (`airlines`):** Znajdź nazwę przewoźnika w tekście lub na obrazku. Jeśli widzisz "obsługiwane przez Condor", wpisz "Condor". Jeśli to pakiet i linia jest nieznana, wpisz "Charter / Low-cost".
+1. **Linie Lotnicze (`airlines`):** Znajdź nazwę przewoźnika (np. Lufthansa, Air China).
+   - Jeśli źródło pisze tylko "Full Service" i nie podaje nazwy -> wpisz "Linia Tradycyjna".
+   - Jeśli widzisz "obsługiwane przez Condor", wpisz "Condor".
+   - Jeśli to pakiet i linia jest nieznana, wpisz "Charter / Low-cost".
 2. **Daty (`date_range`):** Szukaj zakresu miesięcy (np. "Styczeń - Marzec 2026"). Unikaj konkretnych dni, chyba że oferta jest na sztywny termin. NIGDY nie pisz "do potwierdzenia".
 3. **Cena (`price_value`):** Najniższa dostępna cena (liczba).
 
@@ -102,10 +105,11 @@ W brudnopisie oceń opłacalność, haczyki (bagaż, przesiadki) i strategię sp
 
 ### KROK 3: TREŚĆ TELEGRAM (`telegram_message`)
 Stwórz post gotowy do publikacji.
-**STYL:** Krótki, męski, konkretny. Jak SMS eksperta do kumpla. Zero marketingu ("rajskie plaże").
+**STYL:** Krótki, męski, konkretny. Jak SMS eksperta do kumpla. Zero marketingu.
 **STRUKTURA:**
-1. **NAGŁÓWEK:** `[Emoji] Kierunek + **Cena** + (wartość z pola airlines)`
-   *Wzór:* 🇺🇸 Nowy Jork z Londynu za **258 GBP** (Norse Atlantic)
+1. **NAGŁÓWEK:** `[Emoji] Kierunek + [Konkretna Kwota] + (wartość z pola airlines)`
+   - ⚠️ **WAŻNE:** Musisz wpisać LICZBĘ i WALUTĘ z pola `price` (np. **289 USD**). Nie zostawiaj pustego miejsca!
+   - *Wzór:* 🇺🇸 Nowy Jork z Londynu za **258 GBP** (Norse Atlantic)
 2. **ODSTĘP (Pusta linia)**
 3. **TREŚĆ (Max 3 zdania):**
    - Pisz ciągłym tekstem (prozą).
@@ -218,7 +222,7 @@ Stwórz post gotowy do publikacji.
                 for audit in audits:
                     if audit.get('telegram_message'):
                         # Usuwanie cytatów [1] itp.
-                        audit['telegram_message'] = re.sub(r'[\[\]\d+]', '', audit['telegram_message']).strip()
+                        audit['telegram_message'] = re.sub(r'\[\d+\]', '', audit['telegram_message']).strip()
                 
                 log.info(f"Perplexity batch audit successful. Processed {len(audits)} offers.")
                 return audits
