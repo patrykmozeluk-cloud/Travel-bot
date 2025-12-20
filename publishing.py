@@ -32,11 +32,13 @@ _TRAVEL_IMAGES = list(set([
 log = logging.getLogger(__name__)
 
 def format_for_telegraph(text: str) -> str:
-    """Converts telegram_message Markdown (**bold**) and newlines to Telegraph-compatible HTML."""
+    """Converts telegram_message Markdown (*bold* or **bold**) and newlines to Telegraph-compatible HTML."""
     if not text:
         return ""
     # Convert **bold** to <b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    # Convert *bold* to <b> (backup for mixed formatting)
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<b>\1</b>', text)
     # Convert newlines to <br>
     text = text.replace('\n', '<br>')
     return text
@@ -76,6 +78,9 @@ async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: st
 async def send_telegram_message_async(message_content: str, link: str, chat_id: str) -> int | None:
     """Sends a standard offer message, with a fallback from Markdown to plain text."""
     
+    # Fix formatting: Telegram Markdown uses *bold* but AI generates **bold**
+    message_content = message_content.replace("**", "*")
+
     # Payload with Markdown
     payload = {
         "chat_id": chat_id,
