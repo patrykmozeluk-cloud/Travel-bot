@@ -169,7 +169,7 @@ Stwórz post gotowy do publikacji.
                                         "type": "string", 
                                         "enum": ["GEM", "FAIR", "RISK"] 
                                     },
-                                    "sztos_score": { "type": "integer" },
+                                    "sztos_score": { "type": "integer", "description": "Ocena w skali od 1 do 10." },
                                     "telegram_message": { 
                                         "type": "string",
                                         "description": "Gotowy post na Telegram wg zasad formatowania."
