@@ -44,6 +44,36 @@ def format_for_telegraph(text: str) -> str:
     return text
 
 
+def escape_markdown_legacy(text: str) -> str:
+    """
+    Escapes text for Telegram's legacy Markdown parse mode, preserving
+    intentional **bold** formatting from AI (converting it to single *).
+    Escapes: _ * [ `
+    """
+    if not text:
+        return ""
+    
+    # Split by the bold marker **...**
+    # This regex captures the delimiter so we can process alternating parts
+    parts = re.split(r'(\*\*.*?\*\*)', text)
+    
+    escaped_parts = []
+    for part in parts:
+        if part.startswith('**') and part.endswith('**') and len(part) >= 4:
+            # This is a bold block: **content**
+            content = part[2:-2]
+            # Escape the special chars inside the bold text too (e.g. **5* Hotel**)
+            content = re.sub(r'([_*\[`])', r'\\\1', content)
+            # Re-wrap in single * for Telegram Legacy Markdown
+            escaped_parts.append(f'*{content}*')
+        else:
+            # Normal text: escape special chars
+            part = re.sub(r'([_*\[`])', r'\\\1', part)
+            escaped_parts.append(part)
+            
+    return "".join(escaped_parts)
+
+
 async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: str, button_text: str, button_url: str) -> int | None:
     """Sends a photo with a caption and an inline button."""
     async with make_async_client() as client:
@@ -78,13 +108,13 @@ async def send_photo_with_button_async(chat_id: str, photo_url: str, caption: st
 async def send_telegram_message_async(message_content: str, link: str, chat_id: str) -> int | None:
     """Sends a standard offer message, with a fallback from Markdown to plain text."""
     
-    # Fix formatting: Telegram Markdown uses *bold* but AI generates **bold**
-    message_content = message_content.replace("**", "*")
+    # Escape content for Markdown, preserving **bold** as *bold*
+    escaped_content = escape_markdown_legacy(message_content)
 
     # Payload with Markdown
     payload = {
         "chat_id": chat_id,
-        "text": message_content,
+        "text": escaped_content,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
         "reply_markup": {
@@ -101,7 +131,7 @@ async def send_telegram_message_async(message_content: str, link: str, chat_id: 
             
             # Check for "can't parse entities" specifically, which returns a 400
             if r.status_code == 400 and "can't parse entities" in r.text:
-                # This is a predictable error, raise a specific exception to trigger the fallback
+                log.warning(f"Markdown parse error for: {escaped_content}")
                 raise ValueError("Markdown parse error, requires fallback.")
             
             r.raise_for_status() # Raise for other HTTP errors (e.g., 500)
@@ -121,6 +151,8 @@ async def send_telegram_message_async(message_content: str, link: str, chat_id: 
             # --- Second Attempt: Send as Plain Text ---
             try:
                 # Remove parse_mode for plain text
+                # We use original unescaped content for plain text to look nice
+                payload["text"] = message_content
                 payload.pop("parse_mode", None)
                 
                 r_fallback = await client.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
@@ -183,21 +215,33 @@ async def publish_digest_async(state: Dict[str, Any] | None = None, generation: 
         content_html += "<h3>💎 Perełki Dnia (AI Score 10) 💎</h3>"
         content_html += "<p><i>To są absolutne HITY, zweryfikowane przez naszą AI i audyt Perplexity. Nie przegap!</i></p>"
         for offer in diamond_deals:
-            # Używamy sformatowanej wiadomości z AI (Telegram Style)
-            formatted_msg = format_for_telegraph(offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej wyjątkowej oferty!"))
+            # Separujemy nagłówek od reszty treści dla lepszego formatowania na Telegraph
+            msg = offer.get('telegram_message', "")
+            parts = msg.split('\n', 1)
+            header = parts[0].replace('**', '').strip()
+            body = parts[1].strip() if len(parts) > 1 else ""
+
+            content_html += f"<h4>{html.escape(header)}</h4>"
+            if body:
+                content_html += f"<p>{format_for_telegraph(body)}</p>"
             
-            content_html += f"<p>{formatted_msg}</p>"
+            content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
 
     if good_deals:
         content_html += "<h3>🌟 Dobre Okazje (AI Score 9) 🌟</h3>"
         content_html += "<p><b>Solidne oferty po audycie Perplexity, które zasługują na Twoją uwagę.</b></p><br/>"
         for offer in good_deals:
-            # Używamy sformatowanej wiadomości z AI (Telegram Style)
-            formatted_msg = format_for_telegraph(offer.get('telegram_message', "Kliknij, aby sprawdzić szczegóły tej dobrej okazji!"))
+            # Separujemy nagłówek od reszty treści dla lepszego formatowania na Telegraph
+            msg = offer.get('telegram_message', "")
+            parts = msg.split('\n', 1)
+            header = parts[0].replace('**', '').strip()
+            body = parts[1].strip() if len(parts) > 1 else ""
 
-            content_html += f"<p>{formatted_msg}</p>"
-            content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
+            content_html += f"<h4>{html.escape(header)}</h4>"
+            if body:
+                content_html += f"<p>{format_for_telegraph(body)}</p>"
+
             content_html += f"<p><b>Źródło:</b> {html.escape(offer.get('source_name', 'Nieznane'))}</p>"
             content_html += f"<p><a href='{offer['link']}'>👉 SPRAWDŹ OFERTĘ</a></p><hr/>"
     

@@ -151,26 +151,52 @@ async def scrape_description(client: httpx.AsyncClient, url: str) -> str | None:
 
         soup = BeautifulSoup(content, "html.parser")
         
+        # --- PHASE 1: Targeted Extraction (Preferred) ---
         # Zmienione selektory na kontenery, aby łapać też listy <li>, nagłówki itp.
-        selectors = ['article', '.entry-content', '.post-content', '.post-body', 'main']
+        selectors = ['article', '.entry-content', '.post-content', '.post-body', 'main', '#content', '.content']
+        extracted_text = ""
+        
         for sel in selectors:
             container = soup.select_one(sel)
             if container:
-                # OPTYMALIZACJA: Usuwamy śmieci (skrypty, style, nawigację) ZANIM pobierzemy tekst
-                for garbage in container.select('script, style, nav, footer, form, iframe, .share-buttons, .related-posts'):
+                # OPTYMALIZACJA: Usuwamy śmieci ZANIM pobierzemy tekst
+                for garbage in container.select('script, style, nav, footer, form, iframe, .share-buttons, .related-posts, .comments, .sidebar, .ads, header'):
                     garbage.decompose()
 
-                # Pobieramy tekst z oczyszczonego kontenera
                 text = container.get_text(separator=' ', strip=True)
+                if len(text) > 100: # Minimum sensownej treści
+                    extracted_text = text
+                    log.info(f"Scraped content using selector '{sel}': {len(text)} chars.")
+                    break
+        
+        # --- PHASE 2: Fallback "Vacuum" (If Phase 1 failed) ---
+        if len(extracted_text) < 100:
+            log.info(f"Targeted scraping failed for {url} (found {len(extracted_text)} chars). Initiating Fallback Vacuum...")
+            if soup.body:
+                # 1. Clean the entire body
+                for garbage in soup.body.select('script, style, nav, footer, form, iframe, header, aside, .sidebar, .menu, .ads, .cookie-banner, .popup, .comments'):
+                    garbage.decompose()
                 
-                # Limit 1500 znaków - teraz to same konkrety, bo usunęliśmy śmieci
-                if len(text) > 40:
-                    limit = 1500
-                    if len(text) > limit:
-                        last_space = text.rfind(' ', 0, limit)
-                        return text[:last_space] + '...' if last_space != -1 else text[:limit] + '...'
-                    else:
-                        return text
+                # 2. Gather text from content-heavy tags
+                # Szukamy akapitów, nagłówków i elementów list
+                valuable_tags = soup.body.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'])
+                vacuumed_text = " ".join([tag.get_text(strip=True) for tag in valuable_tags])
+                
+                if len(vacuumed_text) > 50:
+                    extracted_text = vacuumed_text
+                    log.info(f"Fallback Vacuum recovered {len(extracted_text)} chars from {url}.")
+                else:
+                    log.warning(f"Fallback Vacuum also failed for {url}.")
+
+        # --- Final Processing ---
+        if extracted_text:
+            limit = 2000 # Zwiększamy limit dla bezpieczeństwa AI
+            if len(extracted_text) > limit:
+                last_space = extracted_text.rfind(' ', 0, limit)
+                return extracted_text[:last_space] + '...' if last_space != -1 else extracted_text[:limit] + '...'
+            else:
+                return extracted_text
+                
     except Exception as e:
         if config.DEBUG_FEEDS:
             log.info(f"DEBUG: Could not scrape description for {url}: {e}")

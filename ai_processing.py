@@ -107,9 +107,10 @@ W brudnopisie oceń opłacalność, haczyki (bagaż, przesiadki) i strategię sp
 Stwórz post gotowy do publikacji.
 **STYL:** Krótki, męski, konkretny. Jak SMS eksperta do kumpla. Zero marketingu.
 **STRUKTURA:**
-1. **NAGŁÓWEK:** `[Emoji] Kierunek + [Konkretna Kwota] + (wartość z pola airlines)`
-   - ⚠️ **WAŻNE:** Musisz wpisać LICZBĘ i WALUTĘ z pola `price` (np. **289 USD**). Nie zostawiaj pustego miejsca!
-   - *Wzór:* 🇺🇸 Nowy Jork z Londynu za **258 GBP** (Norse Atlantic)
+1. **NAGŁÓWEK:** Cała linia ma być pogrubiona. Format: `**[Emoji] Kierunek + [Konkretna Kwota] + (wartość z pola airlines)**`
+   - Bez kropki po emoji.
+   - ⚠️ **WAŻNE:** Musisz wpisać LICZBĘ i WALUTĘ z pola `price` (np. 289 USD). Nie zostawiaj pustego miejsca!
+   - *Wzór:* **🇺🇸 Nowy Jork z Londynu za 258 GBP (Norse Atlantic)**
 2. **ODSTĘP (Pusta linia)**
 3. **TREŚĆ (Max 3 zdania):**
    - Pisz ciągłym tekstem (prozą).

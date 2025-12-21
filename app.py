@@ -166,7 +166,7 @@ async def process_and_publish_offers(state: dict, generation: int) -> bool:
         best_european_gem = european_gems[0] # The highest-scored European GEM
         
         log.info(f"POST-AUDIT: Best European GEM offer '{best_european_gem.get('title')}' (Sztos Score: {best_european_gem.get('sztos_score')}) is a 'SZTOS ALERT' for the '{time_slot}' slot. Publishing immediately.")
-        message = f"🔥 *SZTOS ALERT!* 🔥\n\n{best_european_gem.get('telegram_message', best_european_gem.get('title'))}"
+        message = f"🔥 **SZTOS ALERT!** 🔥\n\n{best_european_gem.get('telegram_message', best_european_gem.get('title'))}"
         
         if config.TELEGRAM_CHANNEL_ID:
             message_id = await send_telegram_message_async(message_content=message, link=best_european_gem['link'], chat_id=config.TELEGRAM_CHANNEL_ID)
