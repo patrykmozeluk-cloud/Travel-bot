@@ -96,7 +96,7 @@ Twoim zadaniem jest sformatowanie ich do publikacji. NIE BĄDŹ "URZĘDNIKIEM". 
 
 ### KROK 1: EKSTRAKCJA DANYCH
 1. **Linie Lotnicze (`airlines`):**
-   - Jeśli nie ma w tekście -> wpisz "Linia Tradycyjna" lub "Przewoźnik Rejsowy".
+   - Jeśli nie ma w tekście -> wpisz "Przewoźnik do sprawdzenia" lub "Charter/Rejsowy".
 2. **Daty (`date_range`):**
    - Jeśli brak -> wpisz "Dostępne terminy wkrótce" lub szacowany sezon na podstawie kontekstu.
 3. **Cena (`price_value`):** Najniższa dostępna cena.
